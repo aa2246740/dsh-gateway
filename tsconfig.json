@@ -1,0 +1,45 @@
+{
+  "extends": "../../tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    {
+      "path": "../../vendor/cordis"
+    },
+    {
+      "path": "../../vendor/schemastery"
+    },
+    {
+      "path": "../../packages/settings/settings"
+    },
+    {
+      "path": "../../packages/client/runtime"
+    },
+    {
+      "path": "../../packages/client/ui-layout"
+    },
+    {
+      "path": "../../packages/client/ui-settings-plugins"
+    },
+    {
+      "path": "../../packages/client/ui-sidebar"
+    },
+    {
+      "path": "../../packages/client/ui-slots"
+    },
+    {
+      "path": "../../packages/core/agent"
+    },
+    {
+      "path": "../../packages/llm/llm"
+    },
+    {
+      "path": "../../packages/core/session"
+    }
+  ]
+}

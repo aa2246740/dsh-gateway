@@ -1,0 +1,5 @@
+id: dsh-messaging-gateway
+entry: src/dsh-messaging-gateway.ts
+marker: "[my-plugins/dsh-messaging-gateway] loaded"
+kind: client
+profile: web
