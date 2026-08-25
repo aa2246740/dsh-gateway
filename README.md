@@ -50,7 +50,7 @@ Remove:
 dsh plugin --profile web remove dsh-messaging-gateway
 ```
 
-`dshx` is a separate, optional devkit. Skip it unless you are editing this plugin. How to get it is at the bottom.
+Prefer this official path. If you already use dshx, see below.
 
 ---
 
@@ -152,7 +152,7 @@ Unknown DMs get a pairing code. There is no approve button on 消息 yet. For a 
 
 ## For agents
 
-Follow [AGENTS.md](AGENTS.md). Default to **official `dsh`**. Do not install dshx unless the human is developing this plugin.
+Follow [AGENTS.md](AGENTS.md). Default to official `dsh`. If the machine already has dshx, give the agent this repo and the dshx repo and let it install.
 
 1. `dsh plugin --profile web add github:aa2246740/dsh-gateway`
 2. Human restarts that Host and reloads the page.
@@ -186,24 +186,9 @@ src/client/      Settings → 消息, sidebar dock
 
 State: `$DSH_HOME/messaging-gateway/state.json` (override with `MESSAGING_GATEWAY_STATE`). Settings tokens: DSH settings namespace `dsh-messaging-gateway`.
 
-## Optional: dshx (plugin authors only)
+## Optional: dshx
 
-Not required to use the Gateway.
-
-dshx is an out-of-process plugin workbench for a Harness **source checkout**. It is not `dsh`, not a Harness fork, and not a substitute for official install.
-
-Get it from [dsh-external-plugin-devkit](https://github.com/aa2246740/dsh-external-plugin-devkit):
-
-```sh
-cd /path/to/deepseek-harness
-git clone https://github.com/aa2246740/dsh-external-plugin-devkit.git tools/dshx
-node --import tsx/esm tools/dshx/src/cli.ts setup --harness "$PWD"
-dshx which && dshx doctor
-```
-
-Then clone this repo into `my-plugins/dsh-messaging-gateway` (keep that folder name; it is the loader id), `pnpm install --ignore-workspace`, `pnpm build`, and follow `dshx activation-plan`.
-
-Do not run both `dsh plugin add` and a dshx overlay for the same loader id.
+Already using an Agent against a Harness checkout? Install [dshx](https://github.com/aa2246740/dsh-external-plugin-devkit), then give the Agent both that repo and this one (`https://github.com/aa2246740/dsh-gateway`). It can take it from there.
 
 ## License
 

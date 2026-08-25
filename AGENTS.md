@@ -8,9 +8,9 @@ Read [README.md](README.md) before installing or pairing. This file is the machi
 - One DSH Host, one Gateway. Slack and Feishu are Platforms on that Gateway, not two products.
 - No shared bot. The human creates their own Slack app and Feishu app. Tokens stay on that Host.
 
-## Install (default: official `dsh`)
+## Install
 
-Do **not** install dshx unless the human is developing this plugin in a Harness source checkout.
+Default: official `dsh`.
 
 ```sh
 dsh plugin --profile web add github:aa2246740/dsh-gateway
@@ -18,7 +18,9 @@ dsh plugin --profile web add github:aa2246740/dsh-gateway
 
 From a local clone: `dsh plugin --profile web add ./dsh-gateway`.
 
-Then the human restarts that Host and reloads the page. `dsh plugin add` is not live activation.
+Then the human restarts that Host and reloads the page.
+
+If dshx is already on the machine, feed the agent https://github.com/aa2246740/dsh-external-plugin-devkit and this repo.
 
 ## Pair
 
@@ -40,12 +42,6 @@ Then the human restarts that Host and reloads the page. `dsh plugin add` is not 
 - Do not approve pairing by editing `$DSH_HOME/messaging-gateway/state.json` unless the human asked for that recovery path.
 - Do not restart an adopted official DSH.app from a managed shell. The human restarts it.
 - Guest pairing codes exist in the Gateway reducer. The 消息 page does not yet approve guests. The first unbound DM becomes the Owner.
-- Do not layer `dsh plugin add` and a dshx overlay for the same id.
-
-## dshx (optional)
-
-Only if the human is editing this plugin. Get it from https://github.com/aa2246740/dsh-external-plugin-devkit — clone into `tools/dshx` of a Harness checkout and run `node --import tsx/esm tools/dshx/src/cli.ts setup --harness "$PWD"`. See the README “Optional: dshx” section.
-
 ## Commands the human can send from Slack / Feishu
 
 `/help` `/model` `/new` `/reset` `/compact` `/dsh <command>`
