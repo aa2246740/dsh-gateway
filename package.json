@@ -21,7 +21,14 @@
     },
     "./package.json": "./package.json"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aa2246740/dsh-gateway.git"
+  },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-ui-layout",
@@ -34,9 +41,10 @@
   "files": [
     "lib/*.js",
     "lib/*.js.map",
-    "lib/types/**/*.d.ts",
-    "cordis.yml",
-    "README.md"
+    "cordis.patch.yml",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
