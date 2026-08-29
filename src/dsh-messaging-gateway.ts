@@ -28,6 +28,15 @@ type WorkspaceRegistry = {
   archiveSession?: (id: ReturnType<typeof SessionId>) => Promise<void>
 }
 
+type CommandHost = {
+  register: (definition: {
+    name: string
+    description: string
+    input?: { hint: string; images: boolean }
+    handler: (invocation: { agent: { id: unknown }; rawInput: string }) => Promise<{ kind: 'success' | 'error'; text: string }>
+  }) => () => void
+}
+
 function gatewayHostIds(runtime: GatewayRuntime): Set<string> {
   const ids = new Set<string>()
   for (const session of Object.values(runtime.state.sessions)) {
@@ -104,11 +113,18 @@ function placeBoundSessions(ctx: Context, runtime: GatewayRuntime, after?: () =>
     for (const row of Object.values(runtime.state.sessions)) {
       if (row.host.kind !== 'bound') continue
       const id = String(row.host.hostSessionId)
+      let resumed = false
       try {
-        await ctx.agents.resume({ resumeSessionId: SessionId(id) })
+        const setup = runtime.setupForAgent(id)
+        await ctx.agents.resume({
+          resumeSessionId: SessionId(id),
+          ...(setup ? { setup } : {}),
+        })
+        resumed = true
       } catch {
         /* already live or the log is gone */
       }
+      if (!resumed) runtime.ensureAgentSetup(id)
       pinSessionTitle(ctx, id, row.title)
       if (!isMainConversation(row.identity)) {
         archiveHostSession(ctx, id)
@@ -124,7 +140,7 @@ function placeBoundSessions(ctx: Context, runtime: GatewayRuntime, after?: () =>
 }
 
 export const name = 'dsh-messaging-gateway'
-export const inject = ['agents']
+export const inject = ['agents', 'commands']
 
 export const Config: z<GatewayConfig> = z.object({
   enabled: z.boolean().default(true),
@@ -193,10 +209,41 @@ document.getElementById('copy').onclick = () => {
 
 export function apply(ctx: Context, config: GatewayConfig) {
   console.log('[my-plugins/dsh-messaging-gateway] loaded')
+  const getLlm = (): LlmFace | undefined => ctx.get('llm') as LlmFace | undefined
+  let runtime!: GatewayRuntime
+
+  const registerModel = (commandHost: CommandHost) => commandHost.register({
+    name: 'model',
+    description: 'Show or switch this session model',
+    input: { hint: '[provider/model]', images: false },
+    handler: async invocation => {
+      const key = String(invocation.agent.id)
+      const llm = getLlm()
+      if (llm === undefined) {
+        return { kind: 'error', text: 'Model switching is unavailable on this Host.' }
+      }
+      const current = runtime.modelPicks.get(key)
+      if (invocation.rawInput.trim().length === 0) {
+        return { kind: 'success', text: formatModelStatus(current) }
+      }
+      const resolved = await resolveModelPick(llm, invocation.rawInput, current)
+      if (!resolved.ok) return { kind: 'error', text: resolved.text }
+      runtime.modelPicks.set(key, resolved.pick)
+      return { kind: 'success', text: `This Slack session now uses ${resolved.pick.provider}/${resolved.pick.model}. Later turns follow this pick.` }
+    },
+  })
+
+  const setupAgent = (agentCtx: Context): void => {
+    const commandHost = agentCtx.get('commands') as CommandHost | undefined
+    if (!commandHost) return
+    agentCtx.effect(() => registerModel(commandHost), 'dsh-messaging-gateway: /model')
+  }
+
   const agents = captureAgents(ctx)
-  const runtime: GatewayRuntime = new GatewayRuntime({
+  runtime = new GatewayRuntime({
     agents,
     getCommands: () => captureCommands(ctx),
+    setupAgent,
     defaultModel: () => {
       const svc = ctx.get('agentDefaultModel') as { currentSelection?: () => { provider: string; model: string } } | undefined
       return svc?.currentSelection?.()
@@ -241,40 +288,6 @@ export function apply(ctx: Context, config: GatewayConfig) {
     void pullSkills()
     const events = skillCtx as Context & { on(event: 'skills/change', listener: () => void): () => void }
     skillCtx.effect(() => events.on('skills/change', () => { void pullSkills() }), 'dsh-messaging-gateway: skills')
-  })
-
-  const llm = ctx.get('llm') as LlmFace | undefined
-  type CommandHost = {
-    register: (definition: {
-      name: string
-      description: string
-      input?: { hint: string; images: boolean }
-      handler: (invocation: { agent: { id: unknown }; rawInput: string }) => Promise<{ kind: 'success' | 'error'; text: string }>
-    }) => () => void
-  }
-  const registerModel = (commandHost: CommandHost) => commandHost.register({
-    name: 'model',
-    description: 'Show or switch this session model',
-    input: { hint: '[provider/model]', images: false },
-    handler: async invocation => {
-      const key = String(invocation.agent.id)
-      if (llm === undefined) {
-        return { kind: 'error', text: 'Model switching is unavailable on this Host.' }
-      }
-      const current = runtime.modelPicks.get(key)
-      if (invocation.rawInput.trim().length === 0) {
-        return { kind: 'success', text: formatModelStatus(current) }
-      }
-      const resolved = await resolveModelPick(llm, invocation.rawInput, current)
-      if (!resolved.ok) return { kind: 'error', text: resolved.text }
-      runtime.modelPicks.set(key, resolved.pick)
-      return { kind: 'success', text: `This Slack session now uses ${resolved.pick.provider}/${resolved.pick.model}. Later turns follow this pick.` }
-    },
-  })
-  ctx.inject(['commands'], cmdCtx => {
-    const commandHost = cmdCtx.get('commands') as CommandHost | undefined
-    if (!commandHost) return
-    cmdCtx.effect(() => registerModel(commandHost), 'dsh-messaging-gateway: /model')
   })
 
   ctx.effect(() => ctx.on('agent/request', async (payload, next) => {

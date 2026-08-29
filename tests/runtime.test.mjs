@@ -41,13 +41,14 @@ function seedState() {
   }).state
 }
 
-function tmpRuntime(agents, defaultModel) {
+function tmpRuntime(agents, defaultModel, setupAgent) {
   const dir = mkdtempSync(join(tmpdir(), 'mgw-rt-'))
   const runtime = new GatewayRuntime({
     path: join(dir, 'state.json'),
     agents,
     state: seedState(),
     ...(defaultModel ? { defaultModel: () => defaultModel } : {}),
+    ...(setupAgent ? { setupAgent } : {}),
   })
   return { runtime, dir }
 }
@@ -155,6 +156,37 @@ test('ensurePrompt creates with the default model', async () => {
     assert.equal(created[0].agentOptions.model, 'gpt-5.6')
     assert.equal(typeof created[0].setup, 'function')
     assert.match(String(created[0].sessionId), /^session-[0-9a-f-]{36}$/i)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('ensurePrompt supplies an Agent-scoped setup even without a default model', async () => {
+  const setupIds = []
+  const created = []
+  const { runtime, dir } = tmpRuntime({
+    get: () => undefined,
+    create: async opts => {
+      created.push(opts)
+      opts.setup?.({ agent: { id: opts.sessionId } })
+      return { agent: { followup: () => {}, cancel: () => {} }, dispose: () => {} }
+    },
+    resume: async () => { throw new Error('resume should not run') },
+  }, undefined, agentCtx => { setupIds.push(String(agentCtx.agent.id)) })
+  try {
+    const result = runtime.apply({
+      kind: 'message',
+      actor: { platform: slack, subject: me },
+      identity: { platform: slack, kind: 'dm', chatId: dmChat, threadId: null },
+      addressing: { kind: 'dm' },
+      prompt: { text: 'ping', attachments: [] },
+      id: id(),
+      at: t(),
+    })
+    for (const call of result.hostCalls) await runtime.perform(call)
+    assert.equal(created.length, 1)
+    assert.equal(typeof created[0].setup, 'function')
+    assert.deepEqual(setupIds, [String(created[0].sessionId)])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -480,4 +512,3 @@ test('flush performs work queued behind turnEnded', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
-

@@ -38,6 +38,16 @@ export type AgentOptionsFace = {
   model?: string
 }
 
+/**
+ * Compose one messaging-owned Agent scope before it is published.
+ *
+ * The callback is deliberately scoped to the Agent factory's setup hook. A
+ * messaging command must not be registered on the Host-wide command layer:
+ * doing so makes it collide with a same-named command supplied by the core
+ * product (for example, the built-in `/model`).
+ */
+export type AgentSetup = (agentCtx: Context) => void
+
 export type HostAgents = {
   get: (id: ReturnType<typeof SessionId>) => AgentFace | undefined
   create: (opts: {
@@ -90,7 +100,9 @@ export class GatewayRuntime {
   private readonly agents: HostAgents
   private readonly commands: HostCommands | undefined
   private readonly getCommands?: () => HostCommands | undefined
+  private readonly setupAgent?: AgentSetup
   private readonly modeled = new Set<string>()
+  private readonly configured = new Set<string>()
   private seq = 0
   private leftoverCalls: HostCall[] = []
   private pending: HostCall[] = []
@@ -124,6 +136,7 @@ export class GatewayRuntime {
     agents: HostAgents
     commands?: HostCommands
     getCommands?: () => HostCommands | undefined
+    setupAgent?: AgentSetup
     state?: GatewayState
     defaultModel?: () => { provider: string; model: string } | undefined
     skills?: SkillPiece[]
@@ -146,6 +159,7 @@ export class GatewayRuntime {
     this.agents = args.agents
     this.commands = args.commands
     if (args.getCommands !== undefined) this.getCommands = args.getCommands
+    if (args.setupAgent !== undefined) this.setupAgent = args.setupAgent
     if (args.defaultModel !== undefined) this.defaultModel = args.defaultModel
     if (args.skills !== undefined) this.skills = [...args.skills]
     if (args.cwd !== undefined) this.cwd = args.cwd
@@ -405,13 +419,37 @@ export class GatewayRuntime {
   }
 
   private agentSetup(pick: { provider: string; model: string } | undefined): ((agentCtx: Context) => void) | undefined {
-    if (!pick) return undefined
+    if (!pick && this.setupAgent === undefined) return undefined
     return agentCtx => {
-      installModelSelection(agentCtx, {
-        current: { provider: pick.provider, model: pick.model },
-        assembled: undefined,
-      })
+      this.setupAgent?.(agentCtx)
+      if (pick) {
+        installModelSelection(agentCtx, {
+          current: { provider: pick.provider, model: pick.model },
+          assembled: undefined,
+        })
+      }
+      const id = agentCtx.agent?.id
+      if (id !== undefined) this.configured.add(String(id))
     }
+  }
+
+  /** Return the complete setup used for a messaging-owned Agent. */
+  setupForAgent(hostId?: string): ((agentCtx: Context) => void) | undefined {
+    return this.agentSetup(hostId === undefined ? this.modelFor() : this.modelFor(hostId))
+  }
+
+  /**
+   * Mount messaging-owned scoped contributions onto an already-live Agent.
+   * This is used when startup discovers that a persisted session was already
+   * resumed by another lifecycle pass, so the resume setup callback did not
+   * get a chance to run in this pass.
+   */
+  ensureAgentSetup(hostId: string): void {
+    if (this.configured.has(hostId) || this.setupAgent === undefined) return
+    const agent = this.agents.get(SessionId(hostId))
+    if (!agent?.ctx) return
+    this.setupAgent(agent.ctx)
+    this.configured.add(hostId)
   }
 
   private attachModel(hostId: string, agent: AgentFace, pick: { provider: string; model: string } | undefined): void {
@@ -466,6 +504,7 @@ export class GatewayRuntime {
     if (call.host.kind === 'bound') {
       const live = this.agents.get(SessionId(call.host.hostSessionId))
       if (live) {
+        this.ensureAgentSetup(String(call.host.hostSessionId))
         this.attachModel(String(call.host.hostSessionId), live, this.modelFor(String(call.host.hostSessionId)))
         return live
       }
