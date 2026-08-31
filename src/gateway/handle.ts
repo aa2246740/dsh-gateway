@@ -337,7 +337,16 @@ function applyHostReport(
       break
     }
     case 'approvalSettled': {
+      const previous = next.turn.kind === 'awaitingApproval' ? next.turn.request : undefined
       next = { ...next, turn: { kind: 'idle' } }
+      if (previous) {
+        deliveries.push(chat(session.identity, session.key, {
+          kind: 'approval',
+          request: previous,
+          handled: true,
+          ...(report.answer ? { answer: report.answer } : {}),
+        }))
+      }
       break
     }
     case 'artifact': {
@@ -374,9 +383,12 @@ function applyActorInbound(
 ): HandleResult {
   const key = sessionKey(inbound.identity)
   const hasSession = Boolean(stamped.sessions[key])
+  const existing = stamped.sessions[key]
   const addressing: Addressing = inbound.kind === 'message' || inbound.kind === 'command'
     ? inbound.addressing
-    : { kind: 'dm' }
+    : existing?.identity.kind === 'group'
+      ? { kind: 'group', mentioned: true, botInvited: false }
+      : { kind: 'dm' }
   if (!mentionOk(addressing, hasSession)) {
     return silent(stamped, inbound.id)
   }
@@ -419,9 +431,15 @@ function applyActorInbound(
   if (inbound.kind === 'approvalAnswer') {
     const session = working.sessions[key]
     if (!session || session.host.kind !== 'bound') return finish(before, working, [], [])
+    if (role !== 'owner') {
+      return finish(before, working, [], [
+        chat(session.identity, session.key, { kind: 'notice', text: 'Only the session owner can approve.' }),
+      ])
+    }
     if (session.turn.kind !== 'awaitingApproval' || session.turn.request.requestId !== inbound.requestId) {
       return finish(before, working, [], [])
     }
+    const request = session.turn.request
     const call: HostCall = {
       kind: 'answerApproval',
       idempotencyKey: idempotencyKey(inbound.id),
@@ -431,7 +449,14 @@ function applyActorInbound(
       answer: inbound.answer,
     }
     const after = putSession(working, { ...session, turn: { kind: 'idle' } })
-    return finish(before, after, [call], [])
+    return finish(before, after, [call], [
+      chat(session.identity, session.key, {
+        kind: 'approval',
+        request,
+        handled: true,
+        answer: inbound.answer,
+      }),
+    ])
   }
 
   if (inbound.kind === 'command') {

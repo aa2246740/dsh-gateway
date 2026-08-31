@@ -17,6 +17,7 @@ export function textFromDelivery(delivery: Delivery): string | undefined {
     case 'stream':
       return body.snapshot?.text
     case 'approval':
+      if (body.handled) return undefined
       return `Approval needed: ${body.request.summary}`
     case 'files':
       return body.files.map(file => file.name).join(', ')

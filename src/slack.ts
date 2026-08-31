@@ -107,7 +107,7 @@ export async function presentSlackDelivery(
       text = body.snapshot?.text
       break
     case 'approval':
-      text = `Approval needed: ${body.request.summary}`
+      text = body.handled ? undefined : `Approval needed: ${body.request.summary}`
       break
     case 'files':
       text = body.files.map(f => f.name).join(', ')

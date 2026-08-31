@@ -52,3 +52,9 @@ If dshx is already on the machine, feed the agent https://github.com/aa2246740/d
 `/help` `/model` `/new` `/reset` `/compact` `/dsh <command>`
 
 Threads on Slack that block `/` use `!` instead (`!help`, `!new`).
+
+## Feishu feel
+
+Feishu-created sessions (DM and @-mentioned groups) get a short speaking contract at **session setup**, stream each committed assistant sentence to chat, and send approvals as interactive cards. Spec decisions live in this repo (`src/feishu-voice.ts`, delivery in `src/runtime.ts`, cards in `src/feishu-card.ts`). Do not paste Grok Bot handbook / system-prompt text here.
+
+Slack and desktop-created sessions stay stock DSH. Same Feishu session opened in the Computer sidebar keeps that feel; that is not a leak.

@@ -19,6 +19,7 @@ Loader id: `dsh-messaging-gateway`. After install, open DSH **设置 → 消息*
 ## What you get
 
 - Slack DM and Feishu DM become real DSH sessions (tools, history, `/` commands).
+- Feishu DMs and @-mentioned group chats use a Grok-like **speaking contract** and **stream replies as they commit**. Desktop-created sessions stay stock DSH. Slack is not given that Feishu feel or Feishu cards.
 - Computer sidebar lists them under Slack / Feishu, collapsed until you open a group.
 - Computer Recents keeps the **main DM** only. Channel `@` still replies on Slack/Feishu, in a separate session, not mixed into the DM.
 - `/new` or `/reset` starts a fresh session in that chat. `/compact` shrinks context without resetting.
@@ -96,7 +97,7 @@ DSH → 左下角 **设置** → 左侧 **消息**。
    - `im:message.p2p_msg:readonly`
    - `im:message.group_at_msg:readonly`
    - `im:message:send_as_bot`
-3. 事件订阅选 **使用长连接接收事件**，订阅 **接收消息 v2.0**。长连接要等本插件先连上，飞书后台才能保存这项。
+3. 事件订阅选 **使用长连接接收事件**，订阅 **接收消息 v2.0**。长连接要等本插件先连上，飞书后台才能保存这项。审批卡片走同一条长连接的 `card.action.trigger`（卡片回传交互），不另开应用、不加 scope。
 4. 凭证与基础信息：App ID（`cli_…`）、App Secret。头像旁复制自己的 **open_id**（`ou_…`，不是机器人的）。
 5. 填回 **消息** 页 → **保存并连接**。
 6. 在飞书里给这个机器人发一条私信。
@@ -144,7 +145,7 @@ Channels only respond when **@mentioned**.
 
 1. [Open platform](https://open.feishu.cn/app): enterprise self-built app, enable the bot.
 2. Scopes (publish a version): `application:app_slash_command:write`, `application:app_slash_command:read`, `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`, `im:message:send_as_bot`.
-3. Event subscription: **long connection**, event **receive message v2.0**. Save that after this plugin is connected.
+3. Event subscription: **long connection**, event **receive message v2.0**. Save that after this plugin is connected. Approval cards use `card.action.trigger` on that same connection.
 4. App ID `cli_…`, App Secret, your `ou_…` open_id.
 5. Save. DM the bot.
 
@@ -186,7 +187,9 @@ From Slack or Feishu:
 ```
 src/gateway/     reducer: handle, list, access, pairing
 src/slack.ts     Slack Socket Mode adapter
-src/feishu.ts    Feishu WS + slash sync
+src/feishu.ts    Feishu WS + slash sync + approval cards
+src/feishu-voice.ts   Feishu speaking contract (session setup only)
+src/feishu-card.ts    Feishu approval card + callback
 src/client/      Settings → 消息, sidebar dock
 ```
 
@@ -196,6 +199,16 @@ The adjacent `instance.lock` is runtime ownership, not user configuration. Do
 not delete it while its owner PID is alive. A later Gateway automatically
 reclaims it only after the recorded process is proved dead; denied PID access
 fails closed.
+
+## Feishu feel (not a model swap)
+
+Three seams, all in this plugin:
+
+1. **Session setup.** When the gateway creates a Feishu host session (`bindNewAgent` / resume of that session), it attaches a short speaking contract on that agent only: human sentences in the chat, short, lead with the answer, speak the result. Desktop `agents.create` and Slack sessions do not get it. Opening the same Feishu session in the Computer sidebar keeps the contract because it is the same host session.
+2. **Text-commit → chat delivery.** `Working…` may still flash at turn start. Each committed `assistant/message` is a Feishu message immediately. The gateway does not wait for host idle to flush the whole turn, and it does not re-split a finished paragraph on periods. Tool traces stay in the session log.
+3. **Approval card + callback.** Feishu approval deliveries are interactive cards (`允许一次` / `拒绝`) mapped onto the existing allow-once / deny protocol. `card.action.trigger` becomes `approvalAnswer`. Only the session owner can settle; a second click is ignored. Desktop approval on the same session may coexist — first click wins, the card then shows 已处理.
+
+Slack outbound stays plain text, including `Approval needed: …`. No Feishu speaking contract, no Feishu card JSON.
 
 ## Optional: dshx
 
