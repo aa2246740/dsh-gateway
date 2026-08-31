@@ -19,7 +19,7 @@ Loader id: `dsh-messaging-gateway`. After install, open DSH **设置 → 消息*
 ## What you get
 
 - Slack DM and Feishu DM become real DSH sessions (tools, history, `/` commands).
-- Feishu DMs and @-mentioned group chats use a Grok-like **speaking contract** and **stream replies as they commit**. Desktop-created sessions stay stock DSH. Slack is not given that Feishu feel or Feishu cards.
+- Feishu and Slack DMs (and @-mentioned group chats) use a Grok-like **speaking contract** and **stream replies as they commit**. Desktop-created sessions stay stock DSH. Feishu approvals are interactive cards; Slack approvals stay plaintext.
 - Computer sidebar lists them under Slack / Feishu, collapsed until you open a group.
 - Computer Recents keeps the **main DM** only. Channel `@` still replies on Slack/Feishu, in a separate session, not mixed into the DM.
 - `/new` or `/reset` starts a fresh session in that chat. `/compact` shrinks context without resetting.
@@ -188,7 +188,7 @@ From Slack or Feishu:
 src/gateway/     reducer: handle, list, access, pairing
 src/slack.ts     Slack Socket Mode adapter
 src/feishu.ts    Feishu WS + slash sync + approval cards
-src/feishu-voice.ts   Feishu speaking contract (session setup only)
+src/feishu-voice.ts   speaking contract (Feishu + Slack gateway sessions)
 src/feishu-card.ts    Feishu approval card + callback
 src/client/      Settings → 消息, sidebar dock
 ```
@@ -200,15 +200,15 @@ not delete it while its owner PID is alive. A later Gateway automatically
 reclaims it only after the recorded process is proved dead; denied PID access
 fails closed.
 
-## Feishu feel (not a model swap)
+## Chat feel (not a model swap)
 
 Three seams, all in this plugin:
 
-1. **Session setup.** When the gateway creates a Feishu host session (`bindNewAgent` / resume of that session), it attaches a short speaking contract on that agent only: human sentences in the chat, short, lead with the answer, speak the result. Desktop `agents.create` and Slack sessions do not get it. Opening the same Feishu session in the Computer sidebar keeps the contract because it is the same host session.
-2. **Text-commit → chat delivery.** `Working…` may still flash at turn start. Each committed `assistant/message` is a Feishu message immediately. The gateway does not wait for host idle to flush the whole turn, and it does not re-split a finished paragraph on periods. Tool traces stay in the session log.
+1. **Session setup.** When the gateway creates a Feishu or Slack host session (`bindNewAgent` / resume of that session), it attaches a short speaking contract on that agent only: human sentences in the chat, short, lead with the answer, speak the result. Desktop `agents.create` does not get it. Opening the same chat session in the Computer sidebar keeps the contract because it is the same host session.
+2. **Text-commit → chat delivery.** `Working…` may still flash at turn start. Each committed `assistant/message` is a chat message immediately (Feishu and Slack). The gateway does not wait for host idle to flush the whole turn, and it does not re-split a finished paragraph on periods. Tool traces stay in the session log.
 3. **Approval card + callback.** Feishu approval deliveries are interactive cards (`允许一次` / `拒绝`) mapped onto the existing allow-once / deny protocol. `card.action.trigger` becomes `approvalAnswer`. Only the session owner can settle; a second click is ignored. Desktop approval on the same session may coexist — first click wins, the card then shows 已处理.
 
-Slack outbound stays plain text, including `Approval needed: …`. No Feishu speaking contract, no Feishu card JSON.
+Slack outbound stays plain text, including `Approval needed: …`. No Feishu card JSON on Slack.
 
 ## Optional: dshx
 

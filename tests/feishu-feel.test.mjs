@@ -160,18 +160,21 @@ test('Feishu DM inbound binds its own host session, not a desktop or Slack sessi
   }
 })
 
-test('Feishu session setup gets the speaking contract; Slack setup does not', async () => {
+test('Feishu and Slack gateway setup both get the speaking contract; desktop setupForAgent does not', async () => {
   n = 0
   const feishuSections = []
   const slackSections = []
+  const desktopSections = []
   const feishuCreated = []
   const slackCreated = []
+  const feishuListeners = []
+  const slackListeners = []
   const { runtime: feishuRt, dir: feishuDir } = tmpRuntime(
-    fakeAgents(feishuCreated, feishuSections, []),
+    fakeAgents(feishuCreated, feishuSections, feishuListeners),
     catalog(bind(feishu)),
   )
   const { runtime: slackRt, dir: slackDir } = tmpRuntime(
-    fakeAgents(slackCreated, slackSections, []),
+    fakeAgents(slackCreated, slackSections, slackListeners),
     catalog(bind(slack, subjectId('U-owner'))),
   )
   try {
@@ -195,7 +198,12 @@ test('Feishu session setup gets the speaking contract; Slack setup does not', as
     })
     for (const call of slackTurn.hostCalls) await slackRt.perform(call)
     assert.equal(feishuSections.some(s => s.name === FEISHU_SPEAKING_CONTRACT_SECTION), true)
-    assert.equal(slackSections.some(s => s.name === FEISHU_SPEAKING_CONTRACT_SECTION), false)
+    assert.equal(slackSections.some(s => s.name === FEISHU_SPEAKING_CONTRACT_SECTION), true)
+    assert.equal(feishuListeners.some(row => row.event === 'approval/request'), true)
+    assert.equal(slackListeners.some(row => row.event === 'approval/request'), false)
+    const desktopSetup = slackRt.setupForAgent()
+    desktopSetup?.(recordingCtx(desktopSections, []))
+    assert.equal(desktopSections.some(s => s.name === FEISHU_SPEAKING_CONTRACT_SECTION), false)
   } finally {
     rmSync(feishuDir, { recursive: true, force: true })
     rmSync(slackDir, { recursive: true, force: true })
@@ -255,7 +263,7 @@ test('Feishu delivers Working… then each committed sentence before idle, witho
   }
 })
 
-test('desktop/Slack session keeps stock idle flush and no Feishu card format', async () => {
+test('Slack delivers Working… then each committed sentence before idle; still no Feishu card format', async () => {
   n = 0
   const created = []
   const { runtime, dir } = tmpRuntime(fakeAgents(created, [], []), catalog(bind(slack, subjectId('U-owner'))))
@@ -277,24 +285,30 @@ test('desktop/Slack session keeps stock idle flush and no Feishu card format', a
     runtime.noteSessionEvent(hostId, { type: 'tool/call', data: { name: 'bash' } })
     runtime.noteSessionEvent(hostId, {
       type: 'assistant/message',
-      data: { message: { content: [{ type: 'text', text: 'First paragraph with tool traces still in the log.' }] } },
+      data: { message: { content: [{ type: 'text', text: 'Done. Files are in /tmp/out.' }] } },
     })
     const mid = posted.filter(d => d.kind === 'chat' && d.body.kind === 'stream' && d.body.snapshot?.text)
-    assert.equal(mid.length, 0)
+    assert.equal(mid.length, 1)
+    assert.equal(mid[0].body.snapshot.text, 'Done. Files are in /tmp/out.')
     runtime.noteSessionEvent(hostId, {
       type: 'assistant/message',
-      data: { message: { content: [{ type: 'text', text: 'Second long memo that stock DSH may keep.' }] } },
+      data: { message: { content: [{ type: 'text', text: 'Need anything else?' }] } },
     })
     runtime.noteAgentStatus(hostId, 'idle')
-    const streams = posted.filter(d => d.kind === 'chat' && d.body.kind === 'stream' && d.body.snapshot?.text)
-    assert.equal(streams.length, 1)
-    assert.match(streams[0].body.snapshot.text, /First paragraph/)
-    assert.match(streams[0].body.snapshot.text, /Second long memo/)
+    const chat = posted.filter(d => d.kind === 'chat')
+    const sentences = chat.filter(d => d.body.kind === 'stream' && d.body.snapshot?.text).map(d => d.body.snapshot.text)
+    assert.deepEqual(sentences, ['Done. Files are in /tmp/out.', 'Need anything else?'])
     const said = []
-    await presentSlackDelivery(streams[0], async args => { said.push(args) })
-    assert.equal(said[0].text.includes('\n\n'), true)
+    for (const delivery of chat) {
+      await presentSlackDelivery(delivery, async args => { said.push(args.text) })
+    }
+    assert.equal(said[0], 'Working…')
+    assert.deepEqual(said.slice(1), ['Done. Files are in /tmp/out.', 'Need anything else?'])
+    assert.equal(said.some(text => text.includes('bash')), false)
     const cards = new Map()
-    assert.equal(feishuOutboundFromDelivery(streams[0], cards), undefined)
+    for (const delivery of chat) {
+      assert.equal(feishuOutboundFromDelivery(delivery, cards), undefined)
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

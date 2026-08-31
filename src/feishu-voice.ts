@@ -4,11 +4,11 @@ import type { ApprovalAnswer } from './gateway/index.ts'
 export const FEISHU_SPEAKING_CONTRACT_SECTION = 'dsh-messaging-gateway:feishu-voice'
 
 /**
- * Product speaking contract for Feishu-created sessions only.
- * Written here; not Grok Bot handbook text.
+ * Product speaking contract for gateway-created Feishu and Slack sessions.
+ * Written here; not Grok Bot handbook text. Desktop agents.create does not get this.
  */
 export const FEISHU_SPEAKING_CONTRACT = [
-  'Talk in this Feishu chat like a friend, not a helpdesk.',
+  'Talk in this chat like a friend, not a helpdesk.',
   'Visible replies are human sentences. Do not put tool names, thinking drafts, or internal state in the chat body. Tool traces may stay in the session log.',
   'Fast questions: answer directly.',
   'Real work: one sentence of what you are doing, then continue.',

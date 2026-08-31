@@ -119,7 +119,7 @@ export class GatewayRuntime {
   private skills: SkillPiece[] = []
   private readonly turnStarted = new Set<string>()
   private readonly turnText = new Map<string, string>()
-  private readonly feishuVisibleSent = new Set<string>()
+  private readonly commitVisibleSent = new Set<string>()
   private readonly approvalWaiters = new Map<string, {
     promise: Promise<ApprovalAnswer>
     resolve: (answer: ApprovalAnswer) => void
@@ -343,8 +343,8 @@ export class GatewayRuntime {
     this.beginTurn(hostId, key)
     const previous = this.turnText.get(hostId) ?? ''
     this.turnText.set(hostId, previous.length === 0 ? piece : `${previous}\n\n${piece}`)
-    if (this.state.sessions[key]?.identity.platform === 'feishu') {
-      this.feishuVisibleSent.add(hostId)
+    if (this.sessionWantsChatFeel(key)) {
+      this.commitVisibleSent.add(hostId)
       this.commit({
         kind: 'hostReport',
         sessionKey: key,
@@ -436,7 +436,7 @@ export class GatewayRuntime {
     if (this.turnStarted.has(hostId)) return
     this.turnStarted.add(hostId)
     this.turnText.set(hostId, '')
-    this.feishuVisibleSent.delete(hostId)
+    this.commitVisibleSent.delete(hostId)
     this.commit({
       kind: 'hostReport',
       sessionKey: key,
@@ -449,10 +449,10 @@ export class GatewayRuntime {
   private endTurn(hostId: string, key: SessionKey): void {
     if (!this.turnStarted.has(hostId)) return
     const text = (this.turnText.get(hostId) ?? '').trim()
-    const alreadySent = this.feishuVisibleSent.has(hostId)
+    const alreadySent = this.commitVisibleSent.has(hostId)
     this.turnStarted.delete(hostId)
     this.turnText.delete(hostId)
-    this.feishuVisibleSent.delete(hostId)
+    this.commitVisibleSent.delete(hostId)
     if (text.length > 0 && !alreadySent) {
       this.commit({
         kind: 'hostReport',
@@ -502,13 +502,14 @@ export class GatewayRuntime {
 
   private agentSetup(
     pick: { provider: string; model: string } | undefined,
-    opts?: { feishu?: boolean },
+    opts?: { chatFeel?: boolean; feishuCards?: boolean },
   ): ((agentCtx: Context) => void) | undefined {
-    const feishu = opts?.feishu === true
-    if (!pick && this.setupAgent === undefined && !feishu) return undefined
+    const chatFeel = opts?.chatFeel === true
+    const feishuCards = opts?.feishuCards === true
+    if (!pick && this.setupAgent === undefined && !chatFeel && !feishuCards) return undefined
     return agentCtx => {
       this.setupAgent?.(agentCtx)
-      if (feishu) this.installFeishuSessionHooks(agentCtx)
+      this.installGatewayChatHooks(agentCtx, { chatFeel, feishuCards })
       if (pick) {
         installModelSelection(agentCtx, {
           current: { provider: pick.provider, model: pick.model },
@@ -520,17 +521,41 @@ export class GatewayRuntime {
     }
   }
 
+  private sessionPlatform(key: SessionKey | undefined): string | undefined {
+    if (!key) return undefined
+    return this.state.sessions[key]?.identity.platform
+  }
+
+  private sessionWantsChatFeel(key: SessionKey | undefined): boolean {
+    const platform = this.sessionPlatform(key)
+    return platform === 'feishu' || platform === 'slack'
+  }
+
   private sessionIsFeishu(key: SessionKey | undefined): boolean {
-    if (!key) return false
-    return this.state.sessions[key]?.identity.platform === 'feishu'
+    return this.sessionPlatform(key) === 'feishu'
+  }
+
+  private hostWantsChatFeel(hostId: string): boolean {
+    return this.sessionWantsChatFeel(this.keyForHost(hostId))
   }
 
   private hostIsFeishu(hostId: string): boolean {
     return this.sessionIsFeishu(this.keyForHost(hostId))
   }
 
-  private installFeishuSessionHooks(agentCtx: Context): void {
-    installFeishuSpeakingContract(agentCtx)
+  private feelOpts(key: SessionKey | undefined): { chatFeel: boolean; feishuCards: boolean } {
+    return {
+      chatFeel: this.sessionWantsChatFeel(key),
+      feishuCards: this.sessionIsFeishu(key),
+    }
+  }
+
+  private installGatewayChatHooks(
+    agentCtx: Context,
+    opts: { chatFeel: boolean; feishuCards: boolean },
+  ): void {
+    if (opts.chatFeel) installFeishuSpeakingContract(agentCtx)
+    if (!opts.feishuCards) return
     installFeishuApprovalHold(agentCtx, (request, next) => {
       const hostId = String((agentCtx as Context & { agent?: { id?: unknown } }).agent?.id ?? request.agent?.id ?? '')
       return this.holdFeishuApproval(hostId, request, next)
@@ -580,8 +605,8 @@ export class GatewayRuntime {
   /** Return the complete setup used for a messaging-owned Agent. */
   setupForAgent(hostId?: string): ((agentCtx: Context) => void) | undefined {
     const pick = hostId === undefined ? this.modelFor() : this.modelFor(hostId)
-    const feishu = hostId !== undefined && this.hostIsFeishu(hostId)
-    return this.agentSetup(pick, { feishu })
+    const key = hostId === undefined ? undefined : this.keyForHost(hostId)
+    return this.agentSetup(pick, this.feelOpts(key))
   }
 
   /**
@@ -595,7 +620,10 @@ export class GatewayRuntime {
     const agent = this.agents.get(SessionId(hostId))
     if (!agent?.ctx) return
     this.setupAgent?.(agent.ctx)
-    if (this.hostIsFeishu(hostId)) this.installFeishuSessionHooks(agent.ctx)
+    this.installGatewayChatHooks(agent.ctx, {
+      chatFeel: this.hostWantsChatFeel(hostId),
+      feishuCards: this.hostIsFeishu(hostId),
+    })
     this.configured.add(hostId)
   }
 
@@ -656,7 +684,7 @@ export class GatewayRuntime {
         return live
       }
       const pick = this.modelFor(String(call.host.hostSessionId))
-      const setup = this.agentSetup(pick, { feishu: this.sessionIsFeishu(call.sessionKey) })
+      const setup = this.agentSetup(pick, this.feelOpts(call.sessionKey))
       const resumed = await this.agents.resume({
         resumeSessionId: SessionId(call.host.hostSessionId),
         ...(pick ? { agentOptions: { provider: pick.provider, model: pick.model } } : {}),
@@ -671,7 +699,7 @@ export class GatewayRuntime {
   private async bindNewAgent(key: SessionKey): Promise<AgentFace> {
     const sessionId = SessionId(`session-${randomUUID()}`)
     const pick = this.modelFor(String(sessionId))
-    const setup = this.agentSetup(pick, { feishu: this.sessionIsFeishu(key) })
+    const setup = this.agentSetup(pick, this.feelOpts(key))
     const cwd = this.cwd?.() ?? process.cwd()
     const created = await this.agents.create({
       sessionId,
