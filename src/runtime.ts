@@ -28,9 +28,12 @@ import { buildCatalog, formatHelp } from './host-catalog.ts'
 import { gatewayStatePath, loadState, saveState } from './persist.ts'
 import type { ModelPick } from './model-command.ts'
 import {
+  assistantChunkTextFromEvent,
   installFeishuApprovalHold,
   installFeishuSpeakingContract,
   outcomeFromAnswer,
+  splitFirstSpoken,
+  visibleChatText,
   type ApprovalHoldOutcome,
   type ApprovalHoldRequest,
 } from './feishu-voice.ts'
@@ -120,6 +123,8 @@ export class GatewayRuntime {
   private readonly turnStarted = new Set<string>()
   private readonly turnText = new Map<string, string>()
   private readonly commitVisibleSent = new Set<string>()
+  private readonly turnRaw = new Map<string, string>()
+  private readonly sentVisible = new Map<string, string>()
   private readonly approvalWaiters = new Map<string, {
     promise: Promise<ApprovalAnswer>
     resolve: (answer: ApprovalAnswer) => void
@@ -338,22 +343,77 @@ export class GatewayRuntime {
       void this.flush()
       return
     }
+    if (this.sessionWantsChatFeel(key)) {
+      const delta = assistantChunkTextFromEvent(event)
+      if (delta.length > 0) {
+        this.beginTurn(hostId, key)
+        const raw = `${this.turnRaw.get(hostId) ?? ''}${delta}`
+        this.turnRaw.set(hostId, raw)
+        this.flushFeishuFirstSpoken(hostId, key, raw)
+        return
+      }
+    }
     const piece = assistantTextFromEvent(event)
     if (piece.length === 0) return
     this.beginTurn(hostId, key)
     const previous = this.turnText.get(hostId) ?? ''
     this.turnText.set(hostId, previous.length === 0 ? piece : `${previous}\n\n${piece}`)
     if (this.sessionWantsChatFeel(key)) {
-      this.commitVisibleSent.add(hostId)
-      this.commit({
-        kind: 'hostReport',
-        sessionKey: key,
-        report: { kind: 'turnProgress', snapshot: { text: piece, tools: [] } },
-        id: this.nextId(),
-        at: this.now(),
-      })
-      void this.flush()
+      this.flushFeishuCommitted(hostId, key, piece)
+      this.turnRaw.delete(hostId)
     }
+  }
+
+  private sendFeishuBubble(hostId: string, key: SessionKey, text: string): void {
+    const body = text.trim()
+    if (body.length === 0) return
+    this.commitVisibleSent.add(hostId)
+    this.commit({
+      kind: 'hostReport',
+      sessionKey: key,
+      report: { kind: 'turnProgress', snapshot: { text: body, tools: [] } },
+      id: this.nextId(),
+      at: this.now(),
+    })
+    void this.flush()
+  }
+
+  /** At most one early bubble: the first spoken sentence. Do not period-split the rest. */
+  private flushFeishuFirstSpoken(hostId: string, key: SessionKey, raw: string): void {
+    if ((this.sentVisible.get(hostId) ?? '').length > 0) return
+    const { first } = splitFirstSpoken(visibleChatText(raw))
+    if (first.length === 0) return
+    this.sentVisible.set(hostId, first)
+    this.sendFeishuBubble(hostId, key, first)
+  }
+
+  /**
+   * First beat of the turn may already be out. Remainder of this committed
+   * message is one bubble. Later messages in the same turn stay whole.
+   */
+  private flushFeishuCommitted(hostId: string, key: SessionKey, raw: string): void {
+    const display = visibleChatText(raw).trim()
+    if (display.length === 0) return
+    const sent = this.sentVisible.get(hostId) ?? ''
+    if (sent.length === 0) {
+      const { first, rest } = splitFirstSpoken(display)
+      if (first.length > 0 && rest.length > 0) {
+        this.sentVisible.set(hostId, first)
+        this.sendFeishuBubble(hostId, key, first)
+        this.sendFeishuBubble(hostId, key, rest)
+        return
+      }
+      this.sentVisible.set(hostId, display)
+      this.sendFeishuBubble(hostId, key, display)
+      return
+    }
+    const rest = display.startsWith(sent) ? display.slice(sent.length).trim() : display
+    if (rest.length === 0 || rest === display && display === sent) return
+    if (rest === display) {
+      this.sendFeishuBubble(hostId, key, display)
+      return
+    }
+    this.sendFeishuBubble(hostId, key, rest)
   }
 
   async perform(call: HostCall): Promise<void> {
@@ -437,6 +497,8 @@ export class GatewayRuntime {
     this.turnStarted.add(hostId)
     this.turnText.set(hostId, '')
     this.commitVisibleSent.delete(hostId)
+    this.turnRaw.delete(hostId)
+    this.sentVisible.delete(hostId)
     this.commit({
       kind: 'hostReport',
       sessionKey: key,
@@ -453,6 +515,8 @@ export class GatewayRuntime {
     this.turnStarted.delete(hostId)
     this.turnText.delete(hostId)
     this.commitVisibleSent.delete(hostId)
+    this.turnRaw.delete(hostId)
+    this.sentVisible.delete(hostId)
     if (text.length > 0 && !alreadySent) {
       this.commit({
         kind: 'hostReport',
@@ -528,7 +592,7 @@ export class GatewayRuntime {
 
   private sessionWantsChatFeel(key: SessionKey | undefined): boolean {
     const platform = this.sessionPlatform(key)
-    return platform === 'feishu' || platform === 'slack'
+    return platform === 'feishu'
   }
 
   private sessionIsFeishu(key: SessionKey | undefined): boolean {

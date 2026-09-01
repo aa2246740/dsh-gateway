@@ -20,13 +20,22 @@ import {
   FEISHU_SPEAKING_CONTRACT_SECTION,
   installFeishuSpeakingContract,
   outcomeFromAnswer,
+  takeCompleteSentences,
+  splitFirstSpoken,
+  visibleChatText,
 } from '../lib/types/feishu-voice.js'
 import {
   feishuApprovalCard,
   handledFeishuCard,
   inboundFromFeishuCardAction,
 } from '../lib/types/feishu-card.js'
-import { feishuOutboundFromDelivery, inboundFromFeishu, presentFeishuDelivery } from '../lib/types/feishu.js'
+import {
+  feishuOutboundFromDelivery,
+  feishuPostContent,
+  inboundFromFeishu,
+  looksLikeMarkdown,
+  presentFeishuDelivery,
+} from '../lib/types/feishu.js'
 import { presentSlackDelivery } from '../lib/types/slack.js'
 import { GatewayRuntime } from '../lib/types/runtime.js'
 import { textFromDelivery } from '../lib/types/present.js'
@@ -96,12 +105,40 @@ function fakeAgents(created, sections, listeners) {
 
 test('speaking contract is product language without Grok handbook text or prompt variables', () => {
   assert.match(FEISHU_SPEAKING_CONTRACT, /friend/)
-  assert.match(FEISHU_SPEAKING_CONTRACT, /human sentences/)
+  assert.match(FEISHU_SPEAKING_CONTRACT, /human sentence/)
   assert.match(FEISHU_SPEAKING_CONTRACT, /tool names/)
+  assert.match(FEISHU_SPEAKING_CONTRACT, /first visible reply/)
   assert.equal(FEISHU_SPEAKING_CONTRACT.includes('{{'), false)
   assert.equal(/grok bot|xAI|x\.ai/i.test(FEISHU_SPEAKING_CONTRACT), false)
   assert.equal(outcomeFromAnswer('allow-once'), 'allowed-once')
   assert.equal(outcomeFromAnswer('deny'), 'rejected')
+})
+
+test('visibleChatText drops English planning before the spoken Chinese sentence', () => {
+  assert.equal(
+    visibleChatText('The user is greeting me in Chinese.\n你好，我是助手。'),
+    '你好，我是助手。',
+  )
+  assert.equal(visibleChatText('在呢！有什么事？'), '在呢！有什么事？')
+})
+
+test('takeCompleteSentences emits finished spoken sentences without splitting decimals or URLs', () => {
+  assert.deepEqual(takeCompleteSentences('可以。按今天的报道'), {
+    parts: ['可以。'],
+    consumed: '可以。'.length,
+  })
+  const url = 'See https://example.com/a.b for more'
+  assert.deepEqual(takeCompleteSentences(url).parts, [])
+  assert.equal(takeCompleteSentences('版本 4.6 还行').parts.length, 0)
+})
+
+test('splitFirstSpoken keeps the remainder as one piece', () => {
+  assert.deepEqual(splitFirstSpoken('我去扫一眼。DeepSeek 开源了。英伟达也有传闻。'), {
+    first: '我去扫一眼。',
+    rest: 'DeepSeek 开源了。英伟达也有传闻。',
+  })
+  assert.deepEqual(splitFirstSpoken('在呢！'), { first: '在呢！', rest: '' })
+  assert.equal(splitFirstSpoken('版本 4.6 还行').first, '')
 })
 
 test('installFeishuSpeakingContract registers the agent-scoped section', () => {
@@ -160,7 +197,7 @@ test('Feishu DM inbound binds its own host session, not a desktop or Slack sessi
   }
 })
 
-test('Feishu and Slack gateway setup both get the speaking contract; desktop setupForAgent does not', async () => {
+test('Feishu gateway setup gets the speaking contract; Slack and desktop setupForAgent do not', async () => {
   n = 0
   const feishuSections = []
   const slackSections = []
@@ -198,7 +235,7 @@ test('Feishu and Slack gateway setup both get the speaking contract; desktop set
     })
     for (const call of slackTurn.hostCalls) await slackRt.perform(call)
     assert.equal(feishuSections.some(s => s.name === FEISHU_SPEAKING_CONTRACT_SECTION), true)
-    assert.equal(slackSections.some(s => s.name === FEISHU_SPEAKING_CONTRACT_SECTION), true)
+    assert.equal(slackSections.some(s => s.name === FEISHU_SPEAKING_CONTRACT_SECTION), false)
     assert.equal(feishuListeners.some(row => row.event === 'approval/request'), true)
     assert.equal(slackListeners.some(row => row.event === 'approval/request'), false)
     const desktopSetup = slackRt.setupForAgent()
@@ -236,8 +273,7 @@ test('Feishu delivers Working… then each committed sentence before idle, witho
     const beforeIdle = posted.filter(d => d.kind === 'chat').map(d => d.body)
     assert.equal(beforeIdle.some(b => b.kind === 'busy' && b.on === true), true)
     const streamsBeforeIdle = beforeIdle.filter(b => b.kind === 'stream' && b.snapshot?.text)
-    assert.equal(streamsBeforeIdle.length, 1)
-    assert.equal(streamsBeforeIdle[0].snapshot.text, 'Done. Files are in /tmp/out.')
+    assert.deepEqual(streamsBeforeIdle.map(d => d.snapshot.text), ['Done.', 'Files are in /tmp/out.'])
     assert.equal(streamsBeforeIdle[0].snapshot.tools.length, 0)
     runtime.noteSessionEvent(hostId, {
       type: 'assistant/message',
@@ -246,7 +282,7 @@ test('Feishu delivers Working… then each committed sentence before idle, witho
     runtime.noteAgentStatus(hostId, 'idle')
     const chat = posted.filter(d => d.kind === 'chat')
     const sentences = chat.filter(d => d.body.kind === 'stream' && d.body.snapshot?.text).map(d => d.body.snapshot.text)
-    assert.deepEqual(sentences, ['Done. Files are in /tmp/out.', 'Need anything else?'])
+    assert.deepEqual(sentences, ['Done.', 'Files are in /tmp/out.', 'Need anything else?'])
     const cards = new Map()
     const outbound = []
     for (const delivery of chat) {
@@ -254,16 +290,24 @@ test('Feishu delivers Working… then each committed sentence before idle, witho
       if (row) outbound.push(row)
     }
     const texts = outbound.filter(row => row.msgType === 'text').map(row => JSON.parse(row.content).text)
-    assert.equal(texts[0], 'Working…')
-    assert.deepEqual(texts.slice(1), ['Done. Files are in /tmp/out.', 'Need anything else?'])
+    assert.equal(texts.includes('Working…'), false)
+    assert.deepEqual(texts, ['Done.', 'Files are in /tmp/out.', 'Need anything else?'])
     assert.equal(texts.some(text => text.includes('bash')), false)
-    assert.equal(texts.filter(text => text === 'Working…').length, 1)
+    const live = {
+      lastUserMessageId: new Map([[String(dmChat), 'om_stream_1']]),
+      typing: new Map(),
+    }
+    const started = posted.find(d => d.kind === 'chat' && d.body.kind === 'busy' && d.body.on === true)
+    const typingOn = feishuOutboundFromDelivery(started, new Map(), live)
+    assert.equal(typingOn?.mode, 'react')
+    assert.equal(typingOn?.emoji, 'Typing')
+    assert.equal(typingOn?.messageId, 'om_stream_1')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('Slack delivers Working… then each committed sentence before idle; still no Feishu card format', async () => {
+test('Slack waits for idle and stays plaintext; no Feishu contract or card format', async () => {
   n = 0
   const created = []
   const { runtime, dir } = tmpRuntime(fakeAgents(created, [], []), catalog(bind(slack, subjectId('U-owner'))))
@@ -288,8 +332,7 @@ test('Slack delivers Working… then each committed sentence before idle; still 
       data: { message: { content: [{ type: 'text', text: 'Done. Files are in /tmp/out.' }] } },
     })
     const mid = posted.filter(d => d.kind === 'chat' && d.body.kind === 'stream' && d.body.snapshot?.text)
-    assert.equal(mid.length, 1)
-    assert.equal(mid[0].body.snapshot.text, 'Done. Files are in /tmp/out.')
+    assert.equal(mid.length, 0)
     runtime.noteSessionEvent(hostId, {
       type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: 'Need anything else?' }] } },
@@ -297,18 +340,125 @@ test('Slack delivers Working… then each committed sentence before idle; still 
     runtime.noteAgentStatus(hostId, 'idle')
     const chat = posted.filter(d => d.kind === 'chat')
     const sentences = chat.filter(d => d.body.kind === 'stream' && d.body.snapshot?.text).map(d => d.body.snapshot.text)
-    assert.deepEqual(sentences, ['Done. Files are in /tmp/out.', 'Need anything else?'])
+    assert.deepEqual(sentences, ['Done. Files are in /tmp/out.\n\nNeed anything else?'])
     const said = []
     for (const delivery of chat) {
       await presentSlackDelivery(delivery, async args => { said.push(args.text) })
     }
     assert.equal(said[0], 'Working…')
-    assert.deepEqual(said.slice(1), ['Done. Files are in /tmp/out.', 'Need anything else?'])
+    assert.deepEqual(said.slice(1), ['Done. Files are in /tmp/out.\n\nNeed anything else?'])
     assert.equal(said.some(text => text.includes('bash')), false)
     const cards = new Map()
     for (const delivery of chat) {
       assert.equal(feishuOutboundFromDelivery(delivery, cards), undefined)
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('Feishu sends the first spoken sentence early; the rest of a digest stays one bubble', async () => {
+  n = 0
+  const created = []
+  const { runtime, dir } = tmpRuntime(fakeAgents(created, [], []), catalog(bind(feishu)))
+  const posted = []
+  runtime.onDeliveries = deliveries => { posted.push(...deliveries) }
+  const ack = '我去扫一眼。'
+  const digest = [
+    'DeepSeek 刚把视觉实验权重开源了。',
+    '英伟达在传要买 Hugging Face。',
+    'Anthropic 发了篇对齐论文。',
+  ].join('')
+  const welded = `${ack}${digest}`
+  try {
+    const result = runtime.apply(inboundFromFeishu({
+      user: String(owner),
+      chatId: String(dmChat),
+      chatType: 'p2p',
+      text: '找新闻',
+      id: 'om_chunk_1',
+      commands: ['help'],
+    }))
+    for (const call of result.hostCalls) await runtime.perform(call)
+    const hostId = Object.values(runtime.state.sessions)[0].host.hostSessionId
+    runtime.noteAgentStatus(hostId, 'running')
+    runtime.noteSessionEvent(hostId, {
+      type: 'assistant/chunk',
+      data: { chunk: { type: 'text-delta', text: ack } },
+    })
+    const beforeRest = posted.filter(d => d.kind === 'chat' && d.body.kind === 'stream' && d.body.snapshot?.text)
+      .map(d => d.body.snapshot.text)
+    assert.deepEqual(beforeRest, [ack])
+    runtime.noteSessionEvent(hostId, {
+      type: 'assistant/chunk',
+      data: { chunk: { type: 'text-delta', text: digest } },
+    })
+    const mid = posted.filter(d => d.kind === 'chat' && d.body.kind === 'stream' && d.body.snapshot?.text)
+      .map(d => d.body.snapshot.text)
+    assert.deepEqual(mid, [ack])
+    runtime.noteSessionEvent(hostId, {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: welded }] } },
+    })
+    runtime.noteAgentStatus(hostId, 'idle')
+    const bubbles = posted.filter(d => d.kind === 'chat' && d.body.kind === 'stream' && d.body.snapshot?.text)
+      .map(d => d.body.snapshot.text)
+    assert.deepEqual(bubbles, [ack, digest])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('Feishu markdown replies use post+md; plain text stays text', () => {
+  assert.equal(looksLikeMarkdown('在呢！有什么事？'), false)
+  assert.equal(looksLikeMarkdown('**结论**\n- 一项'), true)
+  assert.equal(looksLikeMarkdown('见 [文档](https://example.com)'), true)
+  const md = feishuOutboundFromDelivery({
+    kind: 'chat',
+    identity: { platform: feishu, kind: 'dm', chatId: dmChat, threadId: null },
+    sessionKey: 'feishu|dm|oc_dm|',
+    body: { kind: 'stream', phase: 'replace', snapshot: { text: '**结论**\n- 一项', tools: [] } },
+  }, new Map())
+  assert.ok(md)
+  assert.equal(md.msgType, 'post')
+  assert.equal(md.content, feishuPostContent('**结论**\n- 一项'))
+  const parsed = JSON.parse(md.content)
+  assert.equal(parsed.zh_cn.content[0][0].tag, 'md')
+})
+
+test('Feishu outbound strips English thinking drafts from a committed message', async () => {
+  n = 0
+  const created = []
+  const { runtime, dir } = tmpRuntime(fakeAgents(created, [], []), catalog(bind(feishu)))
+  const posted = []
+  runtime.onDeliveries = deliveries => { posted.push(...deliveries) }
+  try {
+    const result = runtime.apply(inboundFromFeishu({
+      user: String(owner),
+      chatId: String(dmChat),
+      chatType: 'p2p',
+      text: '你好',
+      id: 'om_think_1',
+      commands: ['help'],
+    }))
+    for (const call of result.hostCalls) await runtime.perform(call)
+    const hostId = Object.values(runtime.state.sessions)[0].host.hostSessionId
+    runtime.noteAgentStatus(hostId, 'running')
+    runtime.noteSessionEvent(hostId, {
+      type: 'assistant/message',
+      data: {
+        message: {
+          content: [{
+            type: 'text',
+            text: 'The user is greeting me in Chinese and asking what kind of robot I am.\n你好，我是助手。',
+          }],
+        },
+      },
+    })
+    runtime.noteAgentStatus(hostId, 'idle')
+    const sentences = posted.filter(d => d.kind === 'chat' && d.body.kind === 'stream' && d.body.snapshot?.text)
+      .map(d => d.body.snapshot.text)
+    assert.deepEqual(sentences, ['你好，我是助手。'])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

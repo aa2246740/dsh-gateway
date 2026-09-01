@@ -119,24 +119,100 @@ export function inboundFromFeishuEvent(event: FeishuMessageEvent, commands: read
 export type FeishuOutbound = {
   readonly chatId: string
   readonly replyId?: string
-  readonly msgType: 'text' | 'interactive'
+  readonly msgType: 'text' | 'post' | 'interactive'
   readonly content: string
-  readonly mode: 'create' | 'patch'
+  readonly mode: 'create' | 'patch' | 'react' | 'unreact'
   readonly messageId?: string
   readonly requestId?: string
+  readonly emoji?: string
+  readonly reactionId?: string
 }
 
-export type FeishuSay = (out: FeishuOutbound) => Promise<{ messageId?: string } | void>
+export type FeishuSay = (out: FeishuOutbound) => Promise<{ messageId?: string; reactionId?: string } | void>
 
-/** Map one gateway chat delivery to a Feishu create/patch. No period-splitting. */
+/** In-memory Feishu turn chrome: Typing reaction on the user's last message. */
+export type FeishuLive = {
+  lastUserMessageId: Map<string, string>
+  typing: Map<string, { messageId: string; reactionId: string }>
+}
+
+const TYPING_EMOJI = 'Typing'
+
+/** Official Feishu post+md payload. CommonMark 0.31 + GFM. */
+export function feishuPostContent(text: string): string {
+  return JSON.stringify({ zh_cn: { content: [[{ tag: 'md', text }]] } })
+}
+
+/** Detect Markdown that Feishu `text` will not render (lists, fences, headings, tables, emphasis). */
+export function looksLikeMarkdown(text: string): boolean {
+  return /(^|\n)\s{0,3}#{1,6}\s/.test(text)
+    || /(^|\n)\s*[-*+]\s+\S/.test(text)
+    || /(^|\n)\s*\d+\.\s+\S/.test(text)
+    || /```/.test(text)
+    || /\*\*[^*]+\*\*/.test(text)
+    || /__[^_]+__/.test(text)
+    || /\[[^\]]+\]\([^)]+\)/.test(text)
+    || /(^|\n)\s*\|.+\|/.test(text)
+}
+
+function chatTextOutbound(
+  chat: string,
+  replyId: string | undefined,
+  text: string,
+): FeishuOutbound {
+  if (looksLikeMarkdown(text)) {
+    return {
+      chatId: chat,
+      ...(replyId ? { replyId } : {}),
+      msgType: 'post',
+      content: feishuPostContent(text),
+      mode: 'create',
+    }
+  }
+  return {
+    chatId: chat,
+    ...(replyId ? { replyId } : {}),
+    msgType: 'text',
+    content: JSON.stringify({ text }),
+    mode: 'create',
+  }
+}
+
+/** Map one gateway chat delivery to a Feishu create/patch/react. No period-splitting. */
 export function feishuOutboundFromDelivery(
   delivery: Delivery,
   cards: Map<string, string>,
+  live?: FeishuLive,
 ): FeishuOutbound | undefined {
   if (delivery.kind !== 'chat' || delivery.identity.platform !== FEISHU) return undefined
   const chat = String(delivery.identity.chatId)
   const replyId = delivery.identity.threadId ? String(delivery.identity.threadId) : undefined
   const body = delivery.body
+  if (body.kind === 'busy') {
+    if (!live) return undefined
+    if (body.on) {
+      const messageId = live.lastUserMessageId.get(chat)
+      if (!messageId || live.typing.has(chat)) return undefined
+      return {
+        chatId: chat,
+        msgType: 'text',
+        content: '',
+        mode: 'react',
+        messageId,
+        emoji: TYPING_EMOJI,
+      }
+    }
+    const typing = live.typing.get(chat)
+    if (!typing) return undefined
+    return {
+      chatId: chat,
+      msgType: 'text',
+      content: '',
+      mode: 'unreact',
+      messageId: typing.messageId,
+      reactionId: typing.reactionId,
+    }
+  }
   if (body.kind === 'approval') {
     const requestId = String(body.request.requestId)
     if (body.handled) {
@@ -162,23 +238,40 @@ export function feishuOutboundFromDelivery(
   }
   const text = textFromDelivery(delivery)
   if (!text) return undefined
-  return {
-    chatId: chat,
-    ...(replyId ? { replyId } : {}),
-    msgType: 'text',
-    content: JSON.stringify({ text }),
-    mode: 'create',
-  }
+  return chatTextOutbound(chat, replyId, text)
 }
 
 export async function presentFeishuDelivery(
   delivery: Delivery,
   say: FeishuSay,
   cards: Map<string, string> = new Map(),
+  live?: FeishuLive,
 ): Promise<void> {
-  const outbound = feishuOutboundFromDelivery(delivery, cards)
+  const outbound = feishuOutboundFromDelivery(delivery, cards, live)
   if (!outbound) return
+  const chat = outbound.chatId
+  if (outbound.mode === 'create' && live?.typing.has(chat)) {
+    const typing = live.typing.get(chat)
+    if (typing) {
+      await say({
+        chatId: chat,
+        msgType: 'text',
+        content: '',
+        mode: 'unreact',
+        messageId: typing.messageId,
+        reactionId: typing.reactionId,
+      })
+      live.typing.delete(chat)
+    }
+  }
   const posted = await say(outbound)
+  if (outbound.mode === 'react' && live && posted && typeof posted === 'object') {
+    const reactionId = posted.reactionId
+    if (typeof reactionId === 'string' && outbound.messageId) {
+      live.typing.set(chat, { messageId: outbound.messageId, reactionId })
+    }
+  }
+  if (outbound.mode === 'unreact' && live) live.typing.delete(chat)
   if (outbound.mode === 'create' && outbound.msgType === 'interactive' && outbound.requestId) {
     const messageId = posted && typeof posted === 'object' ? posted.messageId : undefined
     if (typeof messageId === 'string' && messageId.length > 0) cards.set(outbound.requestId, messageId)
@@ -200,10 +293,40 @@ export async function runFeishu(
   const Lark = await import('@larksuiteoapi/node-sdk')
   const client = new Lark.Client({ appId: tokens.appId, appSecret: tokens.appSecret })
   const cards = new Map<string, string>()
+  const live: FeishuLive = {
+    lastUserMessageId: new Map(),
+    typing: new Map(),
+  }
   const unwatch = runtime.watchDeliveries(deliveries => {
     for (const delivery of deliveries) {
       if (delivery.kind !== 'chat' || delivery.identity.platform !== FEISHU) continue
       void presentFeishuDelivery(delivery, async out => {
+        if (out.mode === 'react' && out.messageId) {
+          try {
+            const reacted = await client.im.v1.messageReaction.create({
+              path: { message_id: out.messageId },
+              data: { reaction_type: { emoji_type: out.emoji ?? 'Typing' } },
+            }) as { data?: { reaction_id?: string } }
+            return reacted.data?.reaction_id
+              ? { messageId: out.messageId, reactionId: reacted.data.reaction_id }
+              : undefined
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            console.error('[dsh-messaging-gateway] feishu typing react failed', message)
+            return
+          }
+        }
+        if (out.mode === 'unreact' && out.messageId && out.reactionId) {
+          try {
+            await client.im.v1.messageReaction.delete({
+              path: { message_id: out.messageId, reaction_id: out.reactionId },
+            })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            console.error('[dsh-messaging-gateway] feishu typing unreact failed', message)
+          }
+          return
+        }
         if (out.mode === 'patch' && out.messageId) {
           await client.im.v1.message.patch({
             path: { message_id: out.messageId },
@@ -216,7 +339,7 @@ export async function runFeishu(
             path: { message_id: out.replyId },
             data: { content: out.content, msg_type: out.msgType },
           }) as { data?: { message_id?: string } }
-          return { messageId: replied.data?.message_id }
+          return replied.data?.message_id ? { messageId: replied.data.message_id } : undefined
         }
         const created = await client.im.v1.message.create({
           params: { receive_id_type: 'chat_id' },
@@ -226,8 +349,8 @@ export async function runFeishu(
             content: out.content,
           },
         }) as { data?: { message_id?: string } }
-        return { messageId: created.data?.message_id }
-      }, cards).catch(error => {
+        return created.data?.message_id ? { messageId: created.data.message_id } : undefined
+      }, cards, live).catch(error => {
         const message = error instanceof Error ? error.message : String(error)
         console.error('[dsh-messaging-gateway] feishu delivery failed', message)
       })
@@ -249,6 +372,9 @@ export async function runFeishu(
       'im.message.receive_v1': async (data: FeishuMessageEvent) => {
         const inbound = inboundFromFeishuEvent(data, commandsOf())
         if (!inbound) return
+        const userMessageId = data.message?.message_id
+        const chat = data.message?.chat_id
+        if (userMessageId && chat) live.lastUserMessageId.set(chat, userMessageId)
         await runtime.run(inbound)
         if (inbound.kind === 'message' || inbound.kind === 'command') pinTitle(inbound.identity)
       },
