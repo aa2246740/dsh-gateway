@@ -13,6 +13,7 @@ import { inboundFromFeishu, runFeishu, syncFeishuCatalog } from './feishu.ts'
 import { pickMessagingCwd } from './host-cwd.ts'
 import { inboundFromSlack, runSlack } from './slack.ts'
 import { slackManifest } from './slack-manifest.ts'
+import { acquireGatewayInstanceLease } from './instance-lease.ts'
 
 type LiveSession = { id?: unknown; header?: { cwd?: string } }
 type SessionStore = { list?: () => LiveSession[]; get?: (id: ReturnType<typeof SessionId>) => unknown }
@@ -208,6 +209,19 @@ document.getElementById('copy').onclick = () => {
 }
 
 export function apply(ctx: Context, config: GatewayConfig) {
+  let instance: ReturnType<typeof acquireGatewayInstanceLease>
+  try {
+    instance = acquireGatewayInstanceLease()
+  } catch {
+    console.error('[dsh-messaging-gateway] inactive: single-Host lease is unavailable')
+    return
+  }
+  if (!instance.acquired) {
+    const owner = instance.ownerPid === undefined ? '' : ` pid ${instance.ownerPid}`
+    console.error(`[dsh-messaging-gateway] inactive: another Host${owner} owns this DSH_HOME gateway (${instance.reason})`)
+    return
+  }
+  ctx.effect(() => instance.lease.release, 'dsh-messaging-gateway: single Host lease')
   console.log('[my-plugins/dsh-messaging-gateway] loaded')
   const getLlm = (): LlmFace | undefined => ctx.get('llm') as LlmFace | undefined
   let runtime!: GatewayRuntime

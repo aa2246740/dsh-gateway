@@ -4,6 +4,12 @@ One [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Host, on
 
 There is no official shared bot. Tokens never leave your machine.
 
+Gateway 0.1.0 also enforces that rule across processes: before it reads state or
+resumes a chat, it atomically leases `$DSH_HOME/messaging-gateway/instance.lock`.
+If another live or inaccessible Host already owns that Home, this Gateway stays
+inactive instead of becoming a second writer. The DSH UI itself can still start;
+fix the duplicate Host and keep the owner process.
+
 You do **not** need dshx. The default path is official `dsh`.
 
 Loader id: `dsh-messaging-gateway`. After install, open DSH **设置 → 消息**.
@@ -185,6 +191,11 @@ src/client/      Settings → 消息, sidebar dock
 ```
 
 State: `$DSH_HOME/messaging-gateway/state.json` (override with `MESSAGING_GATEWAY_STATE`). Settings tokens: DSH settings namespace `dsh-messaging-gateway`.
+
+The adjacent `instance.lock` is runtime ownership, not user configuration. Do
+not delete it while its owner PID is alive. A later Gateway automatically
+reclaims it only after the recorded process is proved dead; denied PID access
+fails closed.
 
 ## Optional: dshx
 

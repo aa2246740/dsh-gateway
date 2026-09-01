@@ -6,6 +6,9 @@ Read [README.md](README.md) before installing or pairing. This file is the machi
 
 - Public name: **dsh-gateway**. Loader / settings id: `dsh-messaging-gateway`.
 - One DSH Host, one Gateway. Slack and Feishu are Platforms on that Gateway, not two products.
+- This is enforced before state load/resume by the cross-process lease beside
+  `state.json`. A second or process-inaccessible Host must leave its Gateway
+  inactive; never delete `instance.lock` to make it win.
 - No shared bot. The human creates their own Slack app and Feishu app. Tokens stay on that Host.
 
 ## Install
@@ -41,6 +44,8 @@ If dshx is already on the machine, feed the agent https://github.com/aa2246740/d
 - Never print, commit, or paste `xoxb-`, `xapp-`, Feishu App Secret, or `state.json` into chat, git, or evidence.
 - Do not approve pairing by editing `$DSH_HOME/messaging-gateway/state.json` unless the human asked for that recovery path.
 - Do not restart an adopted official DSH.app from a managed shell. The human restarts it.
+- Do not run a second Web Host against the same `DSH_HOME`. Use the existing
+  DSH.app or direct `dsh web` Host; isolated cold-boot tests need another Home.
 - Guest pairing codes exist in the Gateway reducer. The 消息 page does not yet approve guests. The first unbound DM becomes the Owner.
 ## Commands the human can send from Slack / Feishu
 
