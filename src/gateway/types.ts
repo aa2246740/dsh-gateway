@@ -210,7 +210,7 @@ export type HostReport =
   | { readonly kind: 'turnProgress'; readonly snapshot: TurnSnapshot }
   | { readonly kind: 'turnEnded' }
   | { readonly kind: 'approvalRequested'; readonly request: ApprovalView }
-  | { readonly kind: 'approvalSettled'; readonly requestId: ApprovalId }
+  | { readonly kind: 'approvalSettled'; readonly requestId: ApprovalId; readonly answer?: ApprovalAnswer }
   | { readonly kind: 'artifact'; readonly files: readonly OutboundFile[] }
   | { readonly kind: 'commandResult'; readonly text: string }
   | { readonly kind: 'error'; readonly message: string }
@@ -365,7 +365,7 @@ export type ChatBody =
   | { readonly kind: 'notice'; readonly text: string }
   | { readonly kind: 'busy'; readonly on: boolean }
   | { readonly kind: 'stream'; readonly phase: 'start' | 'replace' | 'end'; readonly snapshot?: TurnSnapshot }
-  | { readonly kind: 'approval'; readonly request: ApprovalView }
+  | { readonly kind: 'approval'; readonly request: ApprovalView; readonly handled?: boolean; readonly answer?: ApprovalAnswer }
   | { readonly kind: 'files'; readonly files: readonly OutboundFile[] }
 
 export type ChatDelivery = {

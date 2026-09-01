@@ -14,6 +14,8 @@ import {
   recoverTurns,
   sessionKey,
   timestamp,
+  approvalId,
+  type ApprovalAnswer,
   type Delivery,
   type GatewayState,
   type HandleResult,
@@ -25,6 +27,16 @@ import {
 import { buildCatalog, formatHelp } from './host-catalog.ts'
 import { gatewayStatePath, loadState, saveState } from './persist.ts'
 import type { ModelPick } from './model-command.ts'
+import {
+  assistantChunkTextFromEvent,
+  installFeishuApprovalHold,
+  installFeishuSpeakingContract,
+  outcomeFromAnswer,
+  splitFirstSpoken,
+  visibleChatText,
+  type ApprovalHoldOutcome,
+  type ApprovalHoldRequest,
+} from './feishu-voice.ts'
 
 export type AgentFace = {
   followup: (message: ReturnType<typeof createUserMessage>) => void
@@ -110,6 +122,14 @@ export class GatewayRuntime {
   private skills: SkillPiece[] = []
   private readonly turnStarted = new Set<string>()
   private readonly turnText = new Map<string, string>()
+  private readonly commitVisibleSent = new Set<string>()
+  private readonly turnRaw = new Map<string, string>()
+  private readonly sentVisible = new Map<string, string>()
+  private readonly approvalWaiters = new Map<string, {
+    promise: Promise<ApprovalAnswer>
+    resolve: (answer: ApprovalAnswer) => void
+    settled: boolean
+  }>()
   readonly modelPicks = new Map<string, ModelPick>()
   readonly outbox: Delivery[] = []
   onDeliveries: (deliveries: readonly Delivery[]) => void = () => {}
@@ -273,11 +293,127 @@ export class GatewayRuntime {
       void this.flush()
       return
     }
+    if (event.type === 'approval/asked') {
+      const data = event.data as { id?: unknown; toolName?: unknown; reason?: unknown } | undefined
+      const rawId = typeof data?.id === 'string' && data.id.length > 0 ? data.id : `ask-${hostId}-${this.seq + 1}`
+      const summary = typeof data?.reason === 'string' && data.reason.length > 0
+        ? data.reason
+        : typeof data?.toolName === 'string' && data.toolName.length > 0
+          ? data.toolName
+          : 'Approval needed'
+      this.beginTurn(hostId, key)
+      this.ensureApprovalWaiter(hostId)
+      this.commit({
+        kind: 'hostReport',
+        sessionKey: key,
+        report: {
+          kind: 'approvalRequested',
+          request: {
+            requestId: approvalId(rawId),
+            summary,
+            options: ['allow-once', 'deny'],
+          },
+        },
+        id: this.nextId(),
+        at: this.now(),
+      })
+      void this.flush()
+      return
+    }
+    if (event.type === 'approval/decided') {
+      const data = event.data as { id?: unknown; outcome?: unknown } | undefined
+      const rawId = typeof data?.id === 'string' && data.id.length > 0 ? data.id : `decided-${hostId}`
+      const answer = data?.outcome === 'allowed-once'
+        ? 'allow-once' as const
+        : data?.outcome === 'rejected'
+          ? 'deny' as const
+          : undefined
+      this.approvalWaiters.delete(hostId)
+      this.commit({
+        kind: 'hostReport',
+        sessionKey: key,
+        report: {
+          kind: 'approvalSettled',
+          requestId: approvalId(rawId),
+          ...(answer ? { answer } : {}),
+        },
+        id: this.nextId(),
+        at: this.now(),
+      })
+      void this.flush()
+      return
+    }
+    if (this.sessionWantsChatFeel(key)) {
+      const delta = assistantChunkTextFromEvent(event)
+      if (delta.length > 0) {
+        this.beginTurn(hostId, key)
+        const raw = `${this.turnRaw.get(hostId) ?? ''}${delta}`
+        this.turnRaw.set(hostId, raw)
+        this.flushFeishuFirstSpoken(hostId, key, raw)
+        return
+      }
+    }
     const piece = assistantTextFromEvent(event)
     if (piece.length === 0) return
     this.beginTurn(hostId, key)
     const previous = this.turnText.get(hostId) ?? ''
     this.turnText.set(hostId, previous.length === 0 ? piece : `${previous}\n\n${piece}`)
+    if (this.sessionWantsChatFeel(key)) {
+      this.flushFeishuCommitted(hostId, key, piece)
+      this.turnRaw.delete(hostId)
+    }
+  }
+
+  private sendFeishuBubble(hostId: string, key: SessionKey, text: string): void {
+    const body = text.trim()
+    if (body.length === 0) return
+    this.commitVisibleSent.add(hostId)
+    this.commit({
+      kind: 'hostReport',
+      sessionKey: key,
+      report: { kind: 'turnProgress', snapshot: { text: body, tools: [] } },
+      id: this.nextId(),
+      at: this.now(),
+    })
+    void this.flush()
+  }
+
+  /** At most one early bubble: the first spoken sentence. Do not period-split the rest. */
+  private flushFeishuFirstSpoken(hostId: string, key: SessionKey, raw: string): void {
+    if ((this.sentVisible.get(hostId) ?? '').length > 0) return
+    const { first } = splitFirstSpoken(visibleChatText(raw))
+    if (first.length === 0) return
+    this.sentVisible.set(hostId, first)
+    this.sendFeishuBubble(hostId, key, first)
+  }
+
+  /**
+   * First beat of the turn may already be out. Remainder of this committed
+   * message is one bubble. Later messages in the same turn stay whole.
+   */
+  private flushFeishuCommitted(hostId: string, key: SessionKey, raw: string): void {
+    const display = visibleChatText(raw).trim()
+    if (display.length === 0) return
+    const sent = this.sentVisible.get(hostId) ?? ''
+    if (sent.length === 0) {
+      const { first, rest } = splitFirstSpoken(display)
+      if (first.length > 0 && rest.length > 0) {
+        this.sentVisible.set(hostId, first)
+        this.sendFeishuBubble(hostId, key, first)
+        this.sendFeishuBubble(hostId, key, rest)
+        return
+      }
+      this.sentVisible.set(hostId, display)
+      this.sendFeishuBubble(hostId, key, display)
+      return
+    }
+    const rest = display.startsWith(sent) ? display.slice(sent.length).trim() : display
+    if (rest.length === 0 || rest === display && display === sent) return
+    if (rest === display) {
+      this.sendFeishuBubble(hostId, key, display)
+      return
+    }
+    this.sendFeishuBubble(hostId, key, rest)
   }
 
   async perform(call: HostCall): Promise<void> {
@@ -351,12 +487,18 @@ export class GatewayRuntime {
       this.agents.get(SessionId(call.host.hostSessionId))?.cancel({ kind: 'user' })
       return
     }
+    if (call.kind === 'answerApproval') {
+      this.ensureApprovalWaiter(String(call.host.hostSessionId)).resolve(call.answer)
+    }
   }
 
   private beginTurn(hostId: string, key: SessionKey): void {
     if (this.turnStarted.has(hostId)) return
     this.turnStarted.add(hostId)
     this.turnText.set(hostId, '')
+    this.commitVisibleSent.delete(hostId)
+    this.turnRaw.delete(hostId)
+    this.sentVisible.delete(hostId)
     this.commit({
       kind: 'hostReport',
       sessionKey: key,
@@ -369,9 +511,13 @@ export class GatewayRuntime {
   private endTurn(hostId: string, key: SessionKey): void {
     if (!this.turnStarted.has(hostId)) return
     const text = (this.turnText.get(hostId) ?? '').trim()
+    const alreadySent = this.commitVisibleSent.has(hostId)
     this.turnStarted.delete(hostId)
     this.turnText.delete(hostId)
-    if (text.length > 0) {
+    this.commitVisibleSent.delete(hostId)
+    this.turnRaw.delete(hostId)
+    this.sentVisible.delete(hostId)
+    if (text.length > 0 && !alreadySent) {
       this.commit({
         kind: 'hostReport',
         sessionKey: key,
@@ -418,10 +564,16 @@ export class GatewayRuntime {
     return this.defaultModel?.()
   }
 
-  private agentSetup(pick: { provider: string; model: string } | undefined): ((agentCtx: Context) => void) | undefined {
-    if (!pick && this.setupAgent === undefined) return undefined
+  private agentSetup(
+    pick: { provider: string; model: string } | undefined,
+    opts?: { chatFeel?: boolean; feishuCards?: boolean },
+  ): ((agentCtx: Context) => void) | undefined {
+    const chatFeel = opts?.chatFeel === true
+    const feishuCards = opts?.feishuCards === true
+    if (!pick && this.setupAgent === undefined && !chatFeel && !feishuCards) return undefined
     return agentCtx => {
       this.setupAgent?.(agentCtx)
+      this.installGatewayChatHooks(agentCtx, { chatFeel, feishuCards })
       if (pick) {
         installModelSelection(agentCtx, {
           current: { provider: pick.provider, model: pick.model },
@@ -433,9 +585,92 @@ export class GatewayRuntime {
     }
   }
 
+  private sessionPlatform(key: SessionKey | undefined): string | undefined {
+    if (!key) return undefined
+    return this.state.sessions[key]?.identity.platform
+  }
+
+  private sessionWantsChatFeel(key: SessionKey | undefined): boolean {
+    const platform = this.sessionPlatform(key)
+    return platform === 'feishu'
+  }
+
+  private sessionIsFeishu(key: SessionKey | undefined): boolean {
+    return this.sessionPlatform(key) === 'feishu'
+  }
+
+  private hostWantsChatFeel(hostId: string): boolean {
+    return this.sessionWantsChatFeel(this.keyForHost(hostId))
+  }
+
+  private hostIsFeishu(hostId: string): boolean {
+    return this.sessionIsFeishu(this.keyForHost(hostId))
+  }
+
+  private feelOpts(key: SessionKey | undefined): { chatFeel: boolean; feishuCards: boolean } {
+    return {
+      chatFeel: this.sessionWantsChatFeel(key),
+      feishuCards: this.sessionIsFeishu(key),
+    }
+  }
+
+  private installGatewayChatHooks(
+    agentCtx: Context,
+    opts: { chatFeel: boolean; feishuCards: boolean },
+  ): void {
+    if (opts.chatFeel) installFeishuSpeakingContract(agentCtx)
+    if (!opts.feishuCards) return
+    installFeishuApprovalHold(agentCtx, (request, next) => {
+      const hostId = String((agentCtx as Context & { agent?: { id?: unknown } }).agent?.id ?? request.agent?.id ?? '')
+      return this.holdFeishuApproval(hostId, request, next)
+    })
+  }
+
+  private ensureApprovalWaiter(hostId: string): {
+    promise: Promise<ApprovalAnswer>
+    resolve: (answer: ApprovalAnswer) => void
+    settled: boolean
+  } {
+    const existing = this.approvalWaiters.get(hostId)
+    if (existing && !existing.settled) return existing
+    let resolve!: (answer: ApprovalAnswer) => void
+    const promise = new Promise<ApprovalAnswer>(done => { resolve = done })
+    const entry = {
+      promise,
+      resolve: (answer: ApprovalAnswer) => {
+        if (entry.settled) return
+        entry.settled = true
+        resolve(answer)
+      },
+      settled: false,
+    }
+    this.approvalWaiters.set(hostId, entry)
+    return entry
+  }
+
+  private async holdFeishuApproval(
+    hostId: string,
+    request: ApprovalHoldRequest,
+    next: () => Promise<ApprovalHoldOutcome>,
+  ): Promise<ApprovalHoldOutcome> {
+    const id = hostId || String(request.agent?.id ?? '')
+    if (!id) return next()
+    const waiter = this.ensureApprovalWaiter(id)
+    try {
+      return await Promise.race([
+        waiter.promise.then(outcomeFromAnswer),
+        next(),
+      ])
+    } catch {
+      return 'unavailable'
+    }
+  }
+
   /** Return the complete setup used for a messaging-owned Agent. */
   setupForAgent(hostId?: string): ((agentCtx: Context) => void) | undefined {
-    return this.agentSetup(hostId === undefined ? this.modelFor() : this.modelFor(hostId))
+    const pick = hostId === undefined ? this.modelFor() : this.modelFor(hostId)
+    const key = hostId === undefined ? undefined : this.keyForHost(hostId)
+    return this.agentSetup(pick, this.feelOpts(key))
   }
 
   /**
@@ -445,10 +680,14 @@ export class GatewayRuntime {
    * get a chance to run in this pass.
    */
   ensureAgentSetup(hostId: string): void {
-    if (this.configured.has(hostId) || this.setupAgent === undefined) return
+    if (this.configured.has(hostId)) return
     const agent = this.agents.get(SessionId(hostId))
     if (!agent?.ctx) return
-    this.setupAgent(agent.ctx)
+    this.setupAgent?.(agent.ctx)
+    this.installGatewayChatHooks(agent.ctx, {
+      chatFeel: this.hostWantsChatFeel(hostId),
+      feishuCards: this.hostIsFeishu(hostId),
+    })
     this.configured.add(hostId)
   }
 
@@ -509,7 +748,7 @@ export class GatewayRuntime {
         return live
       }
       const pick = this.modelFor(String(call.host.hostSessionId))
-      const setup = this.agentSetup(pick)
+      const setup = this.agentSetup(pick, this.feelOpts(call.sessionKey))
       const resumed = await this.agents.resume({
         resumeSessionId: SessionId(call.host.hostSessionId),
         ...(pick ? { agentOptions: { provider: pick.provider, model: pick.model } } : {}),
@@ -524,7 +763,7 @@ export class GatewayRuntime {
   private async bindNewAgent(key: SessionKey): Promise<AgentFace> {
     const sessionId = SessionId(`session-${randomUUID()}`)
     const pick = this.modelFor(String(sessionId))
-    const setup = this.agentSetup(pick)
+    const setup = this.agentSetup(pick, this.feelOpts(key))
     const cwd = this.cwd?.() ?? process.cwd()
     const created = await this.agents.create({
       sessionId,

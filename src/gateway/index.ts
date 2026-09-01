@@ -23,6 +23,7 @@ export type {
   Actor,
   Addressing,
   ApprovalAnswer,
+  ApprovalView,
   ChatDelivery,
   CommandCatalog,
   CommandSpec,

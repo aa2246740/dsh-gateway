@@ -52,3 +52,9 @@ If dshx is already on the machine, feed the agent https://github.com/aa2246740/d
 `/help` `/model` `/new` `/reset` `/compact` `/dsh <command>`
 
 Threads on Slack that block `/` use `!` instead (`!help`, `!new`).
+
+## Chat feel
+
+Gateway-created Feishu sessions (DM and @-mentioned groups) get a short speaking contract at **session setup**. Delivery sends the first spoken sentence early, then the rest of that reply as one bubble; do not period-split a digest. Feishu turn-start is a Typing reaction on the user message, not a leftover Working… bubble. Markdown goes out as `post`+`md`. Slack keeps its existing delivery and tone. Feishu approvals are interactive cards. Slack approvals stay plaintext. Spec decisions live in this repo (`src/feishu-voice.ts`, delivery in `src/runtime.ts`, cards in `src/feishu-card.ts`). Do not paste Grok Bot handbook / system-prompt text here.
+
+Desktop-created sessions stay stock DSH. Same gateway session opened in the Computer sidebar keeps that feel; that is not a leak.
