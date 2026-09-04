@@ -10,6 +10,12 @@ If another live or inaccessible Host already owns that Home, this Gateway stays
 inactive instead of becoming a second writer. The DSH UI itself can still start;
 fix the duplicate Host and keep the owner process.
 
+Gateway conversations use their own workspace directory: by default
+`$DSH_HOME/messaging-gateway`. They no longer select an arbitrary open project
+as their cwd or create a `Messaging` workspace there. Advanced users may set
+the absolute `workspaceDir` configuration field to choose another dedicated
+directory; relative paths are rejected.
+
 You do **not** need dshx. The default path is official `dsh`.
 
 Loader id: `dsh-messaging-gateway`. After install, open DSH **设置 → 消息**.

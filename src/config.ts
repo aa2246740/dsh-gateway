@@ -1,5 +1,6 @@
 export interface Config {
   enabled?: boolean
+  workspaceDir?: string
   slackBotToken?: string
   slackAppToken?: string
   slackOwner?: string

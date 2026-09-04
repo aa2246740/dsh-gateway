@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { mkdirSync, realpathSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -10,7 +11,7 @@ import { mergeUserSkills, skillListViews, slashesFromCatalog } from './host-cata
 import { formatModelStatus, resolveModelPick, type LlmFace } from './model-command.ts'
 import { captureAgents, captureCommands, GatewayRuntime } from './runtime.ts'
 import { inboundFromFeishu, runFeishu, syncFeishuCatalog } from './feishu.ts'
-import { pickMessagingCwd } from './host-cwd.ts'
+import { isMessagingWorkspaceCwd, resolveMessagingWorkspaceDir } from './host-cwd.ts'
 import { inboundFromSlack, runSlack } from './slack.ts'
 import { slackManifest } from './slack-manifest.ts'
 import { acquireGatewayInstanceLease } from './instance-lease.ts'
@@ -36,25 +37,6 @@ type CommandHost = {
     input?: { hint: string; images: boolean }
     handler: (invocation: { agent: { id: unknown }; rawInput: string }) => Promise<{ kind: 'success' | 'error'; text: string }>
   }) => () => void
-}
-
-function gatewayHostIds(runtime: GatewayRuntime): Set<string> {
-  const ids = new Set<string>()
-  for (const session of Object.values(runtime.state.sessions)) {
-    if (session.host.kind === 'bound') ids.add(String(session.host.hostSessionId))
-  }
-  return ids
-}
-
-function liveCwd(ctx: Context, skip: Set<string>): string {
-  const sessions = ctx.get('sessions') as SessionStore | undefined
-  const registry = ctx.get('workspaceRegistry') as WorkspaceRegistry | undefined
-  return pickMessagingCwd({
-    skipIds: skip,
-    live: sessions?.list?.() ?? [],
-    workspaces: registry?.list?.() ?? [],
-    fallback: process.cwd(),
-  })
 }
 
 function pinSessionTitle(ctx: Context, id: string, title: string): void {
@@ -83,15 +65,16 @@ function archiveHostSession(ctx: Context, id: string): void {
   })
 }
 
-function attachWorkspace(ctx: Context, id: string, cwd: string): void {
+function attachWorkspace(ctx: Context, id: string, cwd: string, workspaceDir: string): void {
+  if (!isMessagingWorkspaceCwd(cwd, workspaceDir)) return
   const registry = ctx.get('workspaceRegistry') as WorkspaceRegistry | undefined
   if (!registry) return
   void (async () => {
     try {
       let workspace = registry.resolveByPath
-        ? await registry.resolveByPath(cwd)
-        : registry.list?.().find(item => item.path === cwd)
-      if (!workspace && registry.create) workspace = await registry.create(cwd, 'Messaging')
+        ? await registry.resolveByPath(workspaceDir)
+        : registry.list?.().find(item => item.path === workspaceDir)
+      if (!workspace && registry.create) workspace = await registry.create(workspaceDir, 'Messaging')
       await workspace?.attachSession?.(SessionId(id))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -108,7 +91,7 @@ function boundHostIds(runtime: GatewayRuntime): string[] {
   return ids
 }
 
-function placeBoundSessions(ctx: Context, runtime: GatewayRuntime, after?: () => Promise<void>): void {
+function placeBoundSessions(ctx: Context, runtime: GatewayRuntime, workspaceDir: string, after?: () => Promise<void>): void {
   const sessions = ctx.get('sessions') as SessionStore | undefined
   void (async () => {
     for (const row of Object.values(runtime.state.sessions)) {
@@ -134,7 +117,7 @@ function placeBoundSessions(ctx: Context, runtime: GatewayRuntime, after?: () =>
       const live = sessions?.get?.(SessionId(id)) as LiveSession | undefined
       const listed = sessions?.list?.().find(item => String(item.id) === id)
       const path = listed?.header?.cwd ?? live?.header?.cwd
-      if (path) attachWorkspace(ctx, id, path)
+      if (path) attachWorkspace(ctx, id, path, workspaceDir)
     }
     if (after) await after()
   })()
@@ -145,6 +128,7 @@ export const inject = ['agents', 'commands']
 
 export const Config: z<GatewayConfig> = z.object({
   enabled: z.boolean().default(true),
+  workspaceDir: z.string().default(''),
   slackBotToken: z.string().role('secret').default(''),
   slackAppToken: z.string().role('secret').default(''),
   slackOwner: z.string().default(''),
@@ -209,6 +193,9 @@ document.getElementById('copy').onclick = () => {
 }
 
 export function apply(ctx: Context, config: GatewayConfig) {
+  const configuredWorkspaceDir = resolveMessagingWorkspaceDir(config.workspaceDir)
+  mkdirSync(configuredWorkspaceDir, { recursive: true, mode: 0o700 })
+  const workspaceDir = realpathSync(configuredWorkspaceDir)
   let instance: ReturnType<typeof acquireGatewayInstanceLease>
   try {
     instance = acquireGatewayInstanceLease()
@@ -262,11 +249,11 @@ export function apply(ctx: Context, config: GatewayConfig) {
       const svc = ctx.get('agentDefaultModel') as { currentSelection?: () => { provider: string; model: string } } | undefined
       return svc?.currentSelection?.()
     },
-    cwd: (): string => liveCwd(ctx, gatewayHostIds(runtime)),
+    cwd: (): string => workspaceDir,
     onHostSession: ({ id, title, cwd, created, recents }) => {
       pinSessionTitle(ctx, id, title)
       if (!created) return
-      if (recents) attachWorkspace(ctx, id, cwd)
+      if (recents) attachWorkspace(ctx, id, cwd, workspaceDir)
       else archiveHostSession(ctx, id)
     },
     onArchiveSession: id => { archiveHostSession(ctx, id) },
@@ -293,9 +280,9 @@ export function apply(ctx: Context, config: GatewayConfig) {
     }
     runtime.setSkills(mergeUserSkills(batches))
   }
-  placeBoundSessions(ctx, runtime, pullSkills)
+  placeBoundSessions(ctx, runtime, workspaceDir, pullSkills)
   ctx.inject(['sessions', 'sessionTitle', 'workspaceRegistry'], () => {
-    placeBoundSessions(ctx, runtime, pullSkills)
+    placeBoundSessions(ctx, runtime, workspaceDir, pullSkills)
   })
   void pullSkills()
   ctx.inject(['skills'], skillCtx => {
