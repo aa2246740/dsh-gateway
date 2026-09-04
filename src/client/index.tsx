@@ -1,5 +1,8 @@
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context } from '@deepseek-ai/cordis'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import { SETTINGS_NAMESPACE, type Config } from '../config.ts'
@@ -11,18 +14,14 @@ import { MessagingSettings } from './SettingsPage.tsx'
 export const name = 'dsh-messaging-gateway-client'
 export const inject = ['slots', 'settingsScope', 'sessions']
 
+type ClientContext = Omit<Context, 'sessions'> & { readonly sessions: ISessions }
+
 function sessionsFace(ctx: ClientContext): SessionsFace {
-  const sessions = ctx.sessions as unknown as {
-    open: (id: string) => void
-    list?: { getSnapshot?: () => { ids?: readonly string[]; byId?: Record<string, unknown> } }
-    refresh?: () => Promise<void>
+  return {
+    open: id => { ctx.sessions.open(SessionId(id)) },
+    list: ctx.sessions.list,
+    refresh: () => ctx.sessions.refresh(),
   }
-  const face: SessionsFace = {
-    open: id => { sessions.open(id) },
-  }
-  if (sessions.list) face.list = sessions.list
-  if (typeof sessions.refresh === 'function') face.refresh = () => sessions.refresh!()
-  return face
 }
 
 function openSessionOf(ctx: ClientContext): (id: string) => void {

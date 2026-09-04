@@ -3,7 +3,7 @@ import { mkdirSync, realpathSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { SETTINGS_NAMESPACE, type Config as GatewayConfig } from './config.ts'
 import { isMainConversation, platformId, subjectId } from './gateway/index.ts'
@@ -378,12 +378,14 @@ export function apply(ctx: Context, config: GatewayConfig) {
   bindOwner('slack', config.slackOwner ?? '')
   bindOwner('feishu', config.feishuOwner ?? '')
 
-  installSettingsSection(ctx, settingsNamespace(SETTINGS_NAMESPACE), Config, config, {
-    setSource: current => { source = current },
-    onChange: () => {
-      syncSlack()
-      syncFeishu()
-    },
+  ctx.inject(['settings'], settingsCtx => {
+    settingsCtx.settings.installSection(ctx, SETTINGS_NAMESPACE, Config, config, {
+      setSource: current => { source = current },
+      onChange: () => {
+        syncSlack()
+        syncFeishu()
+      },
+    })
   })
 
   type WebServer = {

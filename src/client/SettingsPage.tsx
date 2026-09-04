@@ -1,7 +1,6 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { FEISHU_OPEN_APP_URL, SLACK_CREATE_APP_URL, type Config } from '../config.ts'
 import { bindLabel, platformBind, saveActionLabel, type AccessRow, type GroupRow } from './bind-status.ts'
 import css from './SettingsPage.module.css'
