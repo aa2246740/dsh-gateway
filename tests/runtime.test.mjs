@@ -289,6 +289,7 @@ test('ensurePrompt resumes a bound session with the default model', async () => 
 
 test('ensurePrompt creates in the supplied cwd', async () => {
   const created = []
+  const platforms = []
   const dir = mkdtempSync(join(tmpdir(), 'mgw-rt-'))
   const runtime = new GatewayRuntime({
     path: join(dir, 'state.json'),
@@ -301,7 +302,10 @@ test('ensurePrompt creates in the supplied cwd', async () => {
       resume: async () => { throw new Error('resume should not run') },
     },
     state: seedState(),
-    cwd: () => '/tmp/current-workspace',
+    cwd: platform => {
+      platforms.push(platform)
+      return '/tmp/current-workspace'
+    },
   })
   try {
     const result = runtime.apply({
@@ -315,6 +319,70 @@ test('ensurePrompt creates in the supplied cwd', async () => {
     })
     for (const call of result.hostCalls) await runtime.perform(call)
     assert.equal(created[0].meta.cwd, '/tmp/current-workspace')
+    assert.deepEqual(platforms, ['slack'])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('platform-specific defaults apply to new sessions without changing resumed session cwd', async () => {
+  const created = []
+  const resumed = []
+  const cwdPlatforms = []
+  const dir = mkdtempSync(join(tmpdir(), 'mgw-rt-'))
+  const runtime = new GatewayRuntime({
+    path: join(dir, 'state.json'),
+    agents: {
+      get: () => undefined,
+      create: async opts => {
+        created.push(opts)
+        return { agent: { followup: () => {}, cancel: () => {} }, dispose: () => {} }
+      },
+      resume: async opts => {
+        resumed.push(opts)
+        return { agent: { followup: () => {}, cancel: () => {} }, dispose: () => {} }
+      },
+    },
+    state: seedState(),
+    cwd: platform => {
+      cwdPlatforms.push(platform)
+      return `/tmp/${platform}-workspace`
+    },
+    defaultModel: platform => platform === 'slack'
+      ? { provider: 'configured', model: 'slack-model' }
+      : undefined,
+  })
+  try {
+    const first = runtime.apply({
+      kind: 'message',
+      actor: { platform: slack, subject: me },
+      identity: { platform: slack, kind: 'dm', chatId: dmChat, threadId: null },
+      addressing: { kind: 'dm' },
+      prompt: { text: 'first', attachments: [] },
+      id: id(),
+      at: t(),
+    })
+    for (const call of first.hostCalls) await runtime.perform(call)
+    assert.equal(created[0].meta.cwd, '/tmp/slack-workspace')
+    assert.deepEqual(created[0].agentOptions, { provider: 'configured', model: 'slack-model' })
+
+    const key = Object.keys(runtime.state.sessions)[0]
+    runtime.apply({
+      kind: 'hostReport', sessionKey: key, report: { kind: 'turnEnded' }, id: id(), at: t(),
+    })
+    const second = runtime.apply({
+      kind: 'message',
+      actor: { platform: slack, subject: me },
+      identity: { platform: slack, kind: 'dm', chatId: dmChat, threadId: null },
+      addressing: { kind: 'dm' },
+      prompt: { text: 'resume', attachments: [] },
+      id: id(),
+      at: t(),
+    })
+    for (const call of second.hostCalls) await runtime.perform(call)
+    assert.equal(resumed.length, 1)
+    assert.equal('meta' in resumed[0], false)
+    assert.deepEqual(cwdPlatforms, ['slack'])
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

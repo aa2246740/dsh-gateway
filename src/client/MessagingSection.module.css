@@ -56,7 +56,8 @@
 }
 
 .row {
-  display: block;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   margin: 0;
   padding: 6px 8px 6px 28px;
@@ -69,6 +70,15 @@
   line-height: 18px;
   text-align: left;
   cursor: pointer;
+}
+
+.cwd {
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .row:hover {

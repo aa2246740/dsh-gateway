@@ -29,7 +29,7 @@ If dshx is already on the machine, feed the agent https://github.com/aa2246740/d
 
 1. Open **DSH → Settings → 消息**.
 2. Copy the Slack manifest from that page (`复制 Manifest`), not from memory.
-3. Bind the human’s own member id / open_id, never the bot’s.
+3. In the locally authenticated Settings page, explicitly confirm the human’s own member id / open_id, never the bot’s.
 4. Verify with `GET /plugins/dsh-messaging-gateway/list` and the 消息 badges (`已绑定` / `已连接`).
 5. Prove a DM: send a short message to the bot, then open the matching row under the sidebar Messaging dock.
 
@@ -46,7 +46,7 @@ If dshx is already on the machine, feed the agent https://github.com/aa2246740/d
 - Do not restart an adopted official DSH.app from a managed shell. The human restarts it.
 - Do not run a second Web Host against the same `DSH_HOME`. Use the existing
   DSH.app or direct `dsh web` Host; isolated cold-boot tests need another Home.
-- Guest pairing codes exist in the Gateway reducer. The 消息 page does not yet approve guests. The first unbound DM becomes the Owner.
+- Guest pairing codes exist after an Owner is configured. The 消息 page does not yet approve guests. An unbound platform stays closed until the human explicitly confirms its Owner in the locally authenticated Settings page.
 ## Commands the human can send from Slack / Feishu
 
 `/help` `/model` `/new` `/reset` `/compact` `/dsh <command>`

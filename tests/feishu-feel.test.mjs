@@ -153,6 +153,9 @@ test('installFeishuSpeakingContract registers the agent-scoped section', () => {
 test('Feishu DM inbound binds its own host session, not a desktop or Slack session', async () => {
   n = 0
   let state = catalog(bind(feishu))
+  state = handle(state, {
+    kind: 'bind', platform: slack, owner: subjectId('U-desk'), id: id(), at: t(),
+  }).state
   const desktop = handle(state, {
     kind: 'message',
     actor: { platform: slack, subject: subjectId('U-desk') },

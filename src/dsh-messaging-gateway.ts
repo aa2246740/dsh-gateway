@@ -2,19 +2,22 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { mkdirSync, realpathSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
+import type { HostConnectionHandle } from '@deepseek-ai/dsh-client-connection'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-api-session-controller'
 import z from '@deepseek-ai/schemastery'
-import { SETTINGS_NAMESPACE, type Config as GatewayConfig } from './config.ts'
+import { parseConfiguredModel, SETTINGS_NAMESPACE, type Config as GatewayConfig } from './config.ts'
 import { isMainConversation, platformId, subjectId } from './gateway/index.ts'
 import { mergeUserSkills, skillListViews, slashesFromCatalog } from './host-catalog.ts'
 import { formatModelStatus, resolveModelPick, type LlmFace } from './model-command.ts'
 import { captureAgents, captureCommands, GatewayRuntime } from './runtime.ts'
-import { inboundFromFeishu, runFeishu, syncFeishuCatalog } from './feishu.ts'
-import { isMessagingWorkspaceCwd, resolveMessagingWorkspaceDir } from './host-cwd.ts'
-import { inboundFromSlack, runSlack } from './slack.ts'
+import { runFeishu, syncFeishuCatalog } from './feishu.ts'
+import { isMessagingWorkspaceCwd, resolvePlatformWorkspaceDir } from './host-cwd.ts'
+import { runSlack } from './slack.ts'
 import { slackManifest } from './slack-manifest.ts'
 import { acquireGatewayInstanceLease } from './instance-lease.ts'
+import { currentSessionModel, installSessionModel } from './session-model.ts'
 
 type LiveSession = { id?: unknown; header?: { cwd?: string } }
 type SessionStore = { list?: () => LiveSession[]; get?: (id: ReturnType<typeof SessionId>) => unknown }
@@ -38,6 +41,7 @@ type CommandHost = {
     handler: (invocation: { agent: { id: unknown }; rawInput: string }) => Promise<{ kind: 'success' | 'error'; text: string }>
   }) => () => void
 }
+type HostConnectionAuth = Pick<HostConnectionHandle, 'requestRejection'>
 
 function pinSessionTitle(ctx: Context, id: string, title: string): void {
   if (title.trim().length === 0) return
@@ -65,7 +69,7 @@ function archiveHostSession(ctx: Context, id: string): void {
   })
 }
 
-function attachWorkspace(ctx: Context, id: string, cwd: string, workspaceDir: string): void {
+function attachWorkspace(ctx: Context, id: string, cwd: string, workspaceDir: string, platform: string): void {
   if (!isMessagingWorkspaceCwd(cwd, workspaceDir)) return
   const registry = ctx.get('workspaceRegistry') as WorkspaceRegistry | undefined
   if (!registry) return
@@ -74,7 +78,7 @@ function attachWorkspace(ctx: Context, id: string, cwd: string, workspaceDir: st
       let workspace = registry.resolveByPath
         ? await registry.resolveByPath(workspaceDir)
         : registry.list?.().find(item => item.path === workspaceDir)
-      if (!workspace && registry.create) workspace = await registry.create(workspaceDir, 'Messaging')
+      if (!workspace && registry.create) workspace = await registry.create(workspaceDir, `Messaging · ${platform}`)
       await workspace?.attachSession?.(SessionId(id))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -91,7 +95,12 @@ function boundHostIds(runtime: GatewayRuntime): string[] {
   return ids
 }
 
-function placeBoundSessions(ctx: Context, runtime: GatewayRuntime, workspaceDir: string, after?: () => Promise<void>): void {
+function placeBoundSessions(
+  ctx: Context,
+  runtime: GatewayRuntime,
+  workspaceDirFor: (platform: string) => string,
+  after?: () => Promise<void>,
+): void {
   const sessions = ctx.get('sessions') as SessionStore | undefined
   void (async () => {
     for (const row of Object.values(runtime.state.sessions)) {
@@ -117,21 +126,27 @@ function placeBoundSessions(ctx: Context, runtime: GatewayRuntime, workspaceDir:
       const live = sessions?.get?.(SessionId(id)) as LiveSession | undefined
       const listed = sessions?.list?.().find(item => String(item.id) === id)
       const path = listed?.header?.cwd ?? live?.header?.cwd
-      if (path) attachWorkspace(ctx, id, path, workspaceDir)
+      if (path) attachWorkspace(ctx, id, path, workspaceDirFor(row.identity.platform), row.identity.platform)
     }
     if (after) await after()
   })()
 }
 
 export const name = 'dsh-messaging-gateway'
-export const inject = ['agents', 'commands']
+export const inject = ['agents', 'commands', 'sessionController']
 
 export const Config: z<GatewayConfig> = z.object({
   enabled: z.boolean().default(true),
   workspaceDir: z.string().default(''),
+  slackWorkspaceDir: z.string().default(''),
+  slackModel: z.string().default(''),
+  slackReasoningEffort: z.string().default(''),
   slackBotToken: z.string().role('secret').default(''),
   slackAppToken: z.string().role('secret').default(''),
   slackOwner: z.string().default(''),
+  feishuWorkspaceDir: z.string().default(''),
+  feishuModel: z.string().default(''),
+  feishuReasoningEffort: z.string().default(''),
   feishuAppId: z.string().default(''),
   feishuAppSecret: z.string().role('secret').default(''),
   feishuOwner: z.string().default(''),
@@ -143,30 +158,21 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body, null, 2))
 }
 
-function readJson(req: IncomingMessage): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    req.on('data', chunk => { chunks.push(chunk as Buffer) })
-    req.on('end', () => {
-      const raw = Buffer.concat(chunks).toString('utf8')
-      if (raw.length === 0) {
-        resolve({})
-        return
-      }
-      try {
-        resolve(JSON.parse(raw) as unknown)
-      } catch (error) {
-        reject(error)
-      }
-    })
-    req.on('error', reject)
-  })
-}
-
 function html(res: ServerResponse, body: string): void {
   res.statusCode = 200
   res.setHeader('content-type', 'text/html; charset=utf-8')
   res.end(body)
+}
+
+function authorizeHost(req: IncomingMessage, res: ServerResponse, connection: HostConnectionAuth | undefined): boolean {
+  if (!connection) {
+    json(res, 503, { error: 'Host authentication unavailable' })
+    return false
+  }
+  const rejection = connection.requestRejection(req)
+  if (rejection === undefined) return true
+  json(res, rejection, { error: rejection === 401 ? 'unauthorized' : 'forbidden' })
+  return false
 }
 
 function setupPage(catalogSlashes?: ReturnType<typeof slashesFromCatalog>): string {
@@ -192,10 +198,39 @@ document.getElementById('copy').onclick = () => {
 </body>`
 }
 
+/** This is called only from the Host's authenticated Settings lifecycle. Network adapters never bind owners. */
+export function confirmOwnerFromSettings(runtime: GatewayRuntime, platform: string, owner: string): void {
+  const selected = owner.trim()
+  if (!selected) return
+  const id = platformId(platform)
+  const bound = runtime.state.access.byPlatform[id]
+  if (bound?.kind === 'bound' && bound.owner === subjectId(selected)) return
+  runtime.apply({
+    kind: 'bind',
+    platform: id,
+    owner: subjectId(selected),
+    id: runtime.nextId(),
+    at: runtime.now(),
+  })
+}
+
 export function apply(ctx: Context, config: GatewayConfig) {
-  const configuredWorkspaceDir = resolveMessagingWorkspaceDir(config.workspaceDir)
-  mkdirSync(configuredWorkspaceDir, { recursive: true, mode: 0o700 })
-  const workspaceDir = realpathSync(configuredWorkspaceDir)
+  const workspaceDirs = new Map<string, string>()
+  const workspaceDirFor = (platform: string): string => {
+    const cached = workspaceDirs.get(platform)
+    if (cached) return cached
+    const current = source()
+    const configured = resolvePlatformWorkspaceDir(
+      platform,
+      platform === 'slack' ? current.slackWorkspaceDir : current.feishuWorkspaceDir,
+      current.workspaceDir,
+    )
+    mkdirSync(configured, { recursive: true, mode: 0o700 })
+    const directory = realpathSync(configured)
+    workspaceDirs.set(platform, directory)
+    return directory
+  }
+  let source = () => config
   let instance: ReturnType<typeof acquireGatewayInstanceLease>
   try {
     instance = acquireGatewayInstanceLease()
@@ -216,25 +251,30 @@ export function apply(ctx: Context, config: GatewayConfig) {
   const registerModel = (commandHost: CommandHost) => commandHost.register({
     name: 'model',
     description: 'Show or switch this session model',
-    input: { hint: '[provider/model]', images: false },
+    input: { hint: '[provider/model [effort] | effort <level>]', images: false },
     handler: async invocation => {
       const key = String(invocation.agent.id)
       const llm = getLlm()
       if (llm === undefined) {
         return { kind: 'error', text: 'Model switching is unavailable on this Host.' }
       }
-      const current = runtime.modelPicks.get(key)
+      const current = currentSessionModel(ctx, key) ?? ctx.get('agentDefaultModel')?.currentSelection()
       if (invocation.rawInput.trim().length === 0) {
         return { kind: 'success', text: formatModelStatus(current) }
       }
       const resolved = await resolveModelPick(llm, invocation.rawInput, current)
       if (!resolved.ok) return { kind: 'error', text: resolved.text }
-      runtime.modelPicks.set(key, resolved.pick)
-      return { kind: 'success', text: `This Slack session now uses ${resolved.pick.provider}/${resolved.pick.model}. Later turns follow this pick.` }
+      try {
+        const result = await ctx.sessionController.selectModel({ sessionId: SessionId(key), ...resolved.pick })
+        return { kind: 'success', text: `${formatModelStatus(result.selected)}\nSaved. The next message uses this selection; no desktop message is needed.` }
+      } catch (error) {
+        return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
+      }
     },
   })
 
   const setupAgent = (agentCtx: Context): void => {
+    installSessionModel(agentCtx)
     const commandHost = agentCtx.get('commands') as CommandHost | undefined
     if (!commandHost) return
     agentCtx.effect(() => registerModel(commandHost), 'dsh-messaging-gateway: /model')
@@ -245,15 +285,21 @@ export function apply(ctx: Context, config: GatewayConfig) {
     agents,
     getCommands: () => captureCommands(ctx),
     setupAgent,
-    defaultModel: () => {
+    selectModel: async (id, pick) => {
+      await ctx.sessionController.selectModel({ sessionId: SessionId(id), ...pick })
+    },
+    defaultModel: platform => {
+      const configured = parseConfiguredModel(platform === 'slack' ? source().slackModel : platform === 'feishu' ? source().feishuModel : '',
+        platform === 'slack' ? source().slackReasoningEffort : source().feishuReasoningEffort)
+      if (configured) return configured
       const svc = ctx.get('agentDefaultModel') as { currentSelection?: () => { provider: string; model: string } } | undefined
       return svc?.currentSelection?.()
     },
-    cwd: (): string => workspaceDir,
-    onHostSession: ({ id, title, cwd, created, recents }) => {
+    cwd: platform => workspaceDirFor(platform),
+    onHostSession: ({ id, title, cwd, platform, created, recents }) => {
       pinSessionTitle(ctx, id, title)
       if (!created) return
-      if (recents) attachWorkspace(ctx, id, cwd, workspaceDir)
+      if (recents) attachWorkspace(ctx, id, cwd, workspaceDirFor(platform), platform)
       else archiveHostSession(ctx, id)
     },
     onArchiveSession: id => { archiveHostSession(ctx, id) },
@@ -280,9 +326,9 @@ export function apply(ctx: Context, config: GatewayConfig) {
     }
     runtime.setSkills(mergeUserSkills(batches))
   }
-  placeBoundSessions(ctx, runtime, workspaceDir, pullSkills)
+  placeBoundSessions(ctx, runtime, workspaceDirFor, pullSkills)
   ctx.inject(['sessions', 'sessionTitle', 'workspaceRegistry'], () => {
-    placeBoundSessions(ctx, runtime, workspaceDir, pullSkills)
+    placeBoundSessions(ctx, runtime, workspaceDirFor, pullSkills)
   })
   void pullSkills()
   ctx.inject(['skills'], skillCtx => {
@@ -291,34 +337,16 @@ export function apply(ctx: Context, config: GatewayConfig) {
     skillCtx.effect(() => events.on('skills/change', () => { void pullSkills() }), 'dsh-messaging-gateway: skills')
   })
 
-  ctx.effect(() => ctx.on('agent/request', async (payload, next) => {
-    const resolved = await next()
-    const pick = runtime.modelPicks.get(String(payload.agent.id))
-    if (pick === undefined) return resolved
-    return {
-      ...resolved,
-      provider: pick.provider,
-      model: pick.model,
-    }
-  }), 'dsh-messaging-gateway: session model')
-
-  let source = () => config
   let stopSlack: (() => Promise<void>) | undefined
   let stopFeishu: (() => Promise<void>) | undefined
+  let slackSignature: string | undefined
+  let feishuSignature: string | undefined
+  let slackTail = Promise.resolve()
+  let feishuTail = Promise.resolve()
+  let shuttingDown = false
 
   const bindOwner = (platform: string, owner: string) => {
-    if (!owner) return
-    const id = platformId(platform)
-    const bound = runtime.state.access.byPlatform[id]
-    if (!bound || bound.kind !== 'bound' || bound.owner !== subjectId(owner)) {
-      runtime.apply({
-        kind: 'bind',
-        platform: id,
-        owner: subjectId(owner),
-        id: runtime.nextId(),
-        at: runtime.now(),
-      })
-    }
+    confirmOwnerFromSettings(runtime, platform, owner)
   }
 
   const syncSlack = () => {
@@ -326,15 +354,19 @@ export function apply(ctx: Context, config: GatewayConfig) {
     bindOwner('slack', current.slackOwner ?? '')
     const bot = current.slackBotToken ?? ''
     const app = current.slackAppToken ?? ''
-    void (async () => {
+    const signature = JSON.stringify([current.enabled !== false, bot, app])
+    if (signature === slackSignature) return
+    slackSignature = signature
+    const replace = async () => {
       if (stopSlack) {
         await stopSlack()
         stopSlack = undefined
       }
-      if (current.enabled !== false && bot && app && process.env.MESSAGING_GATEWAY_DISABLE_SLACK !== '1') {
+      if (!shuttingDown && current.enabled !== false && bot && app && process.env.MESSAGING_GATEWAY_DISABLE_SLACK !== '1') {
         stopSlack = await runSlack(runtime, { bot, app })
       }
-    })().catch(error => {
+    }
+    slackTail = slackTail.then(replace, replace).catch(error => {
       const message = error instanceof Error ? error.message : String(error)
       console.error('[dsh-messaging-gateway] slack sync failed', message)
     })
@@ -345,15 +377,19 @@ export function apply(ctx: Context, config: GatewayConfig) {
     bindOwner('feishu', current.feishuOwner ?? '')
     const appId = current.feishuAppId ?? ''
     const appSecret = current.feishuAppSecret ?? ''
-    void (async () => {
+    const signature = JSON.stringify([current.enabled !== false, appId, appSecret])
+    if (signature === feishuSignature) return
+    feishuSignature = signature
+    const replace = async () => {
       if (stopFeishu) {
         await stopFeishu()
         stopFeishu = undefined
       }
-      if (current.enabled !== false && appId && appSecret && process.env.MESSAGING_GATEWAY_DISABLE_FEISHU !== '1') {
+      if (!shuttingDown && current.enabled !== false && appId && appSecret && process.env.MESSAGING_GATEWAY_DISABLE_FEISHU !== '1') {
         stopFeishu = await runFeishu(runtime, { appId, appSecret })
       }
-    })().catch(error => {
+    }
+    feishuTail = feishuTail.then(replace, replace).catch(error => {
       const message = error instanceof Error ? error.message : String(error)
       console.error('[dsh-messaging-gateway] feishu sync failed', message)
     })
@@ -382,6 +418,7 @@ export function apply(ctx: Context, config: GatewayConfig) {
     settingsCtx.settings.installSection(ctx, SETTINGS_NAMESPACE, Config, config, {
       setSource: current => { source = current },
       onChange: () => {
+        workspaceDirs.clear()
         syncSlack()
         syncFeishu()
       },
@@ -391,13 +428,42 @@ export function apply(ctx: Context, config: GatewayConfig) {
   type WebServer = {
     register: (route: { kind: 'exact' | 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void }) => () => void
   }
-  ctx.inject(['webServer'], httpCtx => {
+  ctx.inject(['webServer', 'connection'], httpCtx => {
     const webServer = httpCtx.get('webServer') as WebServer | undefined
+    const connection = httpCtx.get('connection') as HostConnectionAuth | undefined
     if (!webServer) return
     httpCtx.effect(() => webServer.register({
       kind: 'exact',
       path: '/plugins/dsh-messaging-gateway/list',
-      handler: (_req, res) => json(res, 200, runtime.list()),
+      handler: (req, res) => {
+        if (!authorizeHost(req, res, connection)) return
+        if (req.method !== 'GET') return json(res, 405, { error: 'GET only' })
+        const sessions = ctx.get('sessions') as SessionStore | undefined
+        const rows = runtime.list()
+        json(res, 200, {
+          ...rows,
+          platforms: Object.fromEntries(['slack', 'feishu'].map(platform => {
+            const configured = parseConfiguredModel(platform === 'slack' ? source().slackModel : source().feishuModel)
+            const fallback = (ctx.get('agentDefaultModel') as { currentSelection?: () => { provider: string; model: string } } | undefined)
+              ?.currentSelection?.()
+            const model = configured ?? fallback
+            return [platform, {
+              workspaceDir: workspaceDirFor(platform),
+              ...(model ? { model: `${model.provider}/${model.model}` } : {}),
+            }]
+          })),
+          groups: rows.groups.map(group => ({
+            ...group,
+            rows: group.rows.map(row => {
+              if (!row.hostSessionId) return row
+              const live = sessions?.get?.(SessionId(String(row.hostSessionId))) as LiveSession | undefined
+              const listed = sessions?.list?.().find(item => String(item.id) === String(row.hostSessionId))
+              const cwd = listed?.header?.cwd ?? live?.header?.cwd
+              return cwd ? { ...row, cwd } : row
+            }),
+          })),
+        })
+      },
     }), 'dsh-messaging-gateway: list')
     httpCtx.effect(() => webServer.register({
       kind: 'exact',
@@ -412,53 +478,12 @@ export function apply(ctx: Context, config: GatewayConfig) {
     httpCtx.effect(() => webServer.register({
       kind: 'exact',
       path: '/plugins/dsh-messaging-gateway/outbox',
-      handler: (_req, res) => json(res, 200, runtime.outbox),
-    }), 'dsh-messaging-gateway: outbox')
-    httpCtx.effect(() => webServer.register({
-      kind: 'exact',
-      path: '/plugins/dsh-messaging-gateway/ingest',
       handler: (req, res) => {
-        if (req.method !== 'POST') {
-          json(res, 405, { error: 'POST only' })
-          return
-        }
-        void readJson(req).then(async raw => {
-          const body = raw && typeof raw === 'object' ? raw as {
-            platform?: string
-            user?: string
-            channel?: string
-            text?: string
-            mentioned?: boolean
-            chatType?: string
-          } : {}
-          if (!body.user || !body.channel || !body.text) {
-            json(res, 400, { error: 'user, channel, and text are required' })
-            return
-          }
-          const inbound = body.platform === 'feishu'
-            ? inboundFromFeishu({
-              user: body.user,
-              chatId: body.channel,
-              ...(body.chatType ? { chatType: body.chatType } : {}),
-              text: body.text,
-              id: `ingest-${Date.now()}`,
-              ...(body.mentioned === true ? { mentioned: true } : {}),
-              commands: runtime.state.catalog.commands.map(spec => spec.name),
-            })
-            : inboundFromSlack({
-              user: body.user,
-              channel: body.channel,
-              text: body.text,
-              id: `ingest-${Date.now()}`,
-              ...(body.mentioned === true ? { mentioned: true } : {}),
-            })
-          const result = await runtime.run(inbound)
-          json(res, 200, { hostCalls: result.hostCalls.length, deliveries: result.deliveries, list: runtime.list() })
-        }).catch(error => {
-          json(res, 400, { error: error instanceof Error ? error.message : String(error) })
-        })
+        if (!authorizeHost(req, res, connection)) return
+        if (req.method !== 'GET') return json(res, 405, { error: 'GET only' })
+        json(res, 200, runtime.outbox)
       },
-    }), 'dsh-messaging-gateway: ingest')
+    }), 'dsh-messaging-gateway: outbox')
     console.log('[my-plugins/dsh-messaging-gateway] http /plugins/dsh-messaging-gateway/list')
   })
 
@@ -479,8 +504,9 @@ export function apply(ctx: Context, config: GatewayConfig) {
     syncSlack()
     syncFeishu()
     return () => {
-      void stopSlack?.()
-      void stopFeishu?.()
+      shuttingDown = true
+      void slackTail.then(async () => { await stopSlack?.(); stopSlack = undefined })
+      void feishuTail.then(async () => { await stopFeishu?.(); stopFeishu = undefined })
     }
   }, 'dsh-messaging-gateway: platforms')
 }

@@ -11,6 +11,18 @@ export function resolveMessagingWorkspaceDir(
   return resolve(selected)
 }
 
+/** New sessions are isolated per platform unless the user explicitly chooses a shared absolute directory. */
+export function resolvePlatformWorkspaceDir(
+  platform: string,
+  platformWorkspaceDir: string | undefined,
+  legacyWorkspaceDir: string | undefined,
+  dshHome: string = process.env.DSH_HOME ?? join(homedir(), '.dsh'),
+): string {
+  const selected = platformWorkspaceDir?.trim() || legacyWorkspaceDir?.trim()
+  if (selected) return resolveMessagingWorkspaceDir(selected, dshHome)
+  return resolveMessagingWorkspaceDir(join(dshHome, 'messaging-gateway', 'workspaces', platform), dshHome)
+}
+
 /** Existing sessions remain in their own workspace unless their cwd is the Gateway directory. */
 export function isMessagingWorkspaceCwd(cwd: string, workspaceDir: string): boolean {
   return resolve(cwd) === resolve(workspaceDir)

@@ -48,7 +48,7 @@ function dm(subject) {
   }
 }
 
-test('unbound DM binds that actor as owner', () => {
+test('unbound DM cannot claim owner or call the Host', () => {
   n = 0
   const r = handle(withCatalog(emptyState()), {
     kind: 'message',
@@ -58,13 +58,11 @@ test('unbound DM binds that actor as owner', () => {
     at: t(),
   })
   const access = r.state.access.byPlatform[slack]
-  assert.equal(access.kind, 'bound')
-  assert.equal(access.owner, me)
-  assert.equal(r.hostCalls.length, 1)
-  assert.equal(r.hostCalls[0].kind, 'ensurePrompt')
+  assert.equal(access.kind, 'unbound')
+  assert.equal(r.hostCalls.length, 0)
+  assert.equal(r.deliveries.length, 0)
   const slackAccess = list(r.state).access.find(row => row.platform === 'slack')
-  assert.equal(slackAccess.bound, true)
-  assert.equal(slackAccess.owner, me)
+  assert.deepEqual(slackAccess, { platform: 'slack', bound: false, owner: null })
 })
 
 test('unknown DM after bind issues a pairing code and does not call the Host', () => {

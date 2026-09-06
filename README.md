@@ -10,11 +10,13 @@ If another live or inaccessible Host already owns that Home, this Gateway stays
 inactive instead of becoming a second writer. The DSH UI itself can still start;
 fix the duplicate Host and keep the owner process.
 
-Gateway conversations use their own workspace directory: by default
-`$DSH_HOME/messaging-gateway`. They no longer select an arbitrary open project
-as their cwd or create a `Messaging` workspace there. Advanced users may set
-the absolute `workspaceDir` configuration field to choose another dedicated
-directory; relative paths are rejected.
+New Gateway conversations use platform-isolated workspace directories by
+default: `$DSH_HOME/messaging-gateway/workspaces/slack` and
+`$DSH_HOME/messaging-gateway/workspaces/feishu`. Settings shows the actual cwd
+and accepts an absolute directory plus a `provider/model` default for each
+platform. Entering the same absolute directory for both platforms explicitly
+shares it. Existing sessions keep their recorded cwd; the legacy `workspaceDir`
+setting is still honored so upgrades do not move them.
 
 You do **not** need dshx. The default path is official `dsh`.
 
@@ -32,7 +34,7 @@ Loader id: `dsh-messaging-gateway`. After install, open DSH **设置 → 消息*
 
 ## Requirements
 
-- Official DSH with a **web** profile (DSH.app or `dsh --profile web`). Built against **dsh-v0.1.0-rc.8**.
+- Official DSH with a **web** profile (DSH.app or `dsh --profile web`). Built against **dsh-v0.1.2-rc.1**.
 - The `dsh` CLI that came with that install.
 - A Slack workspace you can install apps into, and/or a Feishu tenant where you can create a 企业自建应用.
 
@@ -112,7 +114,15 @@ DSH → 左下角 **设置** → 左侧 **消息**。
 
 群里同样要 @ 机器人才会回。
 
-第一条未绑定的私信会把发信人收成这台 Gateway 的 Owner。设置里没填 open_id 也不妨碍已经在聊的飞书 DM。
+未绑定的平台会保持关闭。必须在本机已认证的 **设置 → 消息** 中明确保存自己的 member id / open_id，私信本身不会取得 Owner。升级时已有 Owner、token 与会话历史保持不变，无需重新连接。
+
+### 模型与推理强度
+
+在 **设置 → 消息 → Slack / 飞书** 中一起保存新会话工作目录、模型和推理强度，然后再开始聊天。推理档位来自模型自身的目录；换模型会重置档位。选择「跟随 Host 默认」时，同时跟随默认模型和默认强度。
+
+这些默认值用于首次私信及 `/new` / `/reset` 创建的会话，不覆盖已有会话。已有会话在电脑模型选择器里切换即可立即保存，下一条手机消息直接使用新选择，不需要先在电脑上发一句话。正在生成的请求不被中途更换；新选择从下一次请求组装开始生效。
+
+手机也可发送 `/model provider/model high`，或用 `/model effort high` 只改当前模型的推理强度；`/model effort default` 恢复模型默认，`/model` 查看当前选择。无效档位会报错并保留原选择。这些操作与桌面使用同一个持久化 `model/selection` 状态，重开 Host 后仍保留。
 
 ### 4. 别人找你的 bot 聊天
 

@@ -30,7 +30,7 @@ test('resolveModelPick uses an explicit provider/model pair', async () => {
 test('resolveModelPick searches registered providers for a bare model id', async () => {
   const llm = {
     resolveCallConfig: async config => config,
-    listProviders: () => [{ provider: 'pi-openrouter' }],
+    listProviders: () => [{ id: 'pi-openrouter' }],
     listModels: async () => [{ id: 'gpt-5.6-sol' }],
   }
   const resolved = await resolveModelPick(llm, 'gpt-5.6-sol', undefined)

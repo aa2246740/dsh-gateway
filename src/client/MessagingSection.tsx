@@ -8,6 +8,7 @@ type Row = {
   hostSessionId: string | null
   title: string
   turn: string
+  cwd?: string
 }
 
 type Group = {
@@ -106,7 +107,8 @@ export function MessagingSection({ wide, openSession }: MessagingSectionProps) {
                       if (row.hostSessionId) openSession(row.hostSessionId)
                     }}
                   >
-                    {row.title}{row.turn === 'inFlight' ? ' …' : ''}
+                    <span>{row.title}{row.turn === 'inFlight' ? ' …' : ''}</span>
+                    {row.cwd ? <span className={css.cwd} title={row.cwd}>{row.cwd}</span> : null}
                   </button>
                 ))}
               </div>

@@ -1,5 +1,4 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
@@ -113,7 +112,6 @@ export class GatewayRuntime {
   private readonly commands: HostCommands | undefined
   private readonly getCommands?: () => HostCommands | undefined
   private readonly setupAgent?: AgentSetup
-  private readonly modeled = new Set<string>()
   private readonly configured = new Set<string>()
   private seq = 0
   private leftoverCalls: HostCall[] = []
@@ -130,7 +128,6 @@ export class GatewayRuntime {
     resolve: (answer: ApprovalAnswer) => void
     settled: boolean
   }>()
-  readonly modelPicks = new Map<string, ModelPick>()
   readonly outbox: Delivery[] = []
   onDeliveries: (deliveries: readonly Delivery[]) => void = () => {}
   private sinks: Array<(deliveries: readonly Delivery[]) => void> = []
@@ -140,12 +137,14 @@ export class GatewayRuntime {
     return () => { this.sinks = this.sinks.filter(sink => sink !== fn) }
   }
 
-  private readonly defaultModel?: () => { provider: string; model: string } | undefined
-  private readonly cwd?: () => string | undefined
+  private readonly defaultModel?: (platform?: string) => ModelPick | undefined
+  private readonly selectModel?: (id: string, pick: ModelPick) => Promise<void>
+  private readonly cwd?: (platform: string) => string | undefined
   private readonly onHostSession?: (info: {
     id: string
     title: string
     cwd: string
+    platform: string
     created: boolean
     recents: boolean
   }) => void
@@ -158,13 +157,15 @@ export class GatewayRuntime {
     getCommands?: () => HostCommands | undefined
     setupAgent?: AgentSetup
     state?: GatewayState
-    defaultModel?: () => { provider: string; model: string } | undefined
+    defaultModel?: (platform?: string) => ModelPick | undefined
+    selectModel?: (id: string, pick: ModelPick) => Promise<void>
     skills?: SkillPiece[]
-    cwd?: () => string | undefined
+    cwd?: (platform: string) => string | undefined
     onHostSession?: (info: {
       id: string
       title: string
       cwd: string
+      platform: string
       created: boolean
       recents: boolean
     }) => void
@@ -181,6 +182,7 @@ export class GatewayRuntime {
     if (args.getCommands !== undefined) this.getCommands = args.getCommands
     if (args.setupAgent !== undefined) this.setupAgent = args.setupAgent
     if (args.defaultModel !== undefined) this.defaultModel = args.defaultModel
+    if (args.selectModel !== undefined) this.selectModel = args.selectModel
     if (args.skills !== undefined) this.skills = [...args.skills]
     if (args.cwd !== undefined) this.cwd = args.cwd
     if (args.onHostSession !== undefined) this.onHostSession = args.onHostSession
@@ -556,12 +558,9 @@ export class GatewayRuntime {
     return undefined
   }
 
-  private modelFor(hostId?: string): { provider: string; model: string } | undefined {
-    if (hostId !== undefined) {
-      const picked = this.modelPicks.get(hostId)
-      if (picked) return { provider: picked.provider, model: picked.model }
-    }
-    return this.defaultModel?.()
+  private modelFor(hostId?: string, key?: SessionKey): ModelPick | undefined {
+    const session = key ? this.state.sessions[key] : hostId ? this.state.sessions[this.keyForHost(hostId) ?? ''] : undefined
+    return this.defaultModel?.(session?.identity.platform)
   }
 
   private agentSetup(
@@ -574,12 +573,6 @@ export class GatewayRuntime {
     return agentCtx => {
       this.setupAgent?.(agentCtx)
       this.installGatewayChatHooks(agentCtx, { chatFeel, feishuCards })
-      if (pick) {
-        installModelSelection(agentCtx, {
-          current: { provider: pick.provider, model: pick.model },
-          assembled: undefined,
-        })
-      }
       const id = agentCtx.agent?.id
       if (id !== undefined) this.configured.add(String(id))
     }
@@ -691,25 +684,13 @@ export class GatewayRuntime {
     this.configured.add(hostId)
   }
 
-  private attachModel(hostId: string, agent: AgentFace, pick: { provider: string; model: string } | undefined): void {
-    if (!pick || this.modeled.has(hostId)) return
-    if (agent.ctx) {
-      installModelSelection(agent.ctx, {
-        current: { provider: pick.provider, model: pick.model },
-        assembled: undefined,
-      })
-    }
-    this.modeled.add(hostId)
-    this.modelPicks.set(hostId, pick)
-  }
-
-  private pinHost(session: MessagingSession | undefined, created: boolean): void {
+  private pinHost(session: MessagingSession | undefined, created: boolean, actualCwd?: string): void {
     if (!session || session.host.kind !== 'bound' || !this.onHostSession) return
-    const cwd = this.cwd?.() ?? process.cwd()
     this.onHostSession({
       id: String(session.host.hostSessionId),
       title: session.title,
-      cwd,
+      cwd: actualCwd ?? '',
+      platform: session.identity.platform,
       created,
       recents: isMainConversation(session.identity),
     })
@@ -744,10 +725,9 @@ export class GatewayRuntime {
       const live = this.agents.get(SessionId(call.host.hostSessionId))
       if (live) {
         this.ensureAgentSetup(String(call.host.hostSessionId))
-        this.attachModel(String(call.host.hostSessionId), live, this.modelFor(String(call.host.hostSessionId)))
         return live
       }
-      const pick = this.modelFor(String(call.host.hostSessionId))
+      const pick = this.modelFor(String(call.host.hostSessionId), call.sessionKey)
       const setup = this.agentSetup(pick, this.feelOpts(call.sessionKey))
       const resumed = await this.agents.resume({
         resumeSessionId: SessionId(call.host.hostSessionId),
@@ -762,16 +742,17 @@ export class GatewayRuntime {
 
   private async bindNewAgent(key: SessionKey): Promise<AgentFace> {
     const sessionId = SessionId(`session-${randomUUID()}`)
-    const pick = this.modelFor(String(sessionId))
+    const pick = this.modelFor(String(sessionId), key)
     const setup = this.agentSetup(pick, this.feelOpts(key))
-    const cwd = this.cwd?.() ?? process.cwd()
+    const platform = this.state.sessions[key]?.identity.platform ?? 'unknown'
+    const cwd = this.cwd?.(platform) ?? process.cwd()
     const created = await this.agents.create({
       sessionId,
       meta: { cwd },
       ...(pick ? { agentOptions: { provider: pick.provider, model: pick.model } } : {}),
       ...(setup ? { setup } : {}),
     })
-    if (pick) this.modelPicks.set(String(sessionId), pick)
+    if (pick) await this.selectModel?.(String(sessionId), pick)
     this.commit({
       kind: 'hostReport',
       sessionKey: key,
@@ -779,7 +760,7 @@ export class GatewayRuntime {
       id: this.nextId(),
       at: this.now(),
     })
-    this.pinHost(this.state.sessions[key], true)
+    this.pinHost(this.state.sessions[key], true, cwd)
     return created.agent
   }
 }

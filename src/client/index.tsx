@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -12,9 +13,10 @@ import { watchMessagingNavIcon } from './nav-icon.ts'
 import { MessagingSettings } from './SettingsPage.tsx'
 
 export const name = 'dsh-messaging-gateway-client'
-export const inject = ['slots', 'settingsScope', 'sessions']
+export const inject = ['slots', 'settingsScope', 'sessions', 'remote', 'remote.session']
 
 type ClientContext = Omit<Context, 'sessions'> & { readonly sessions: ISessions }
+type ModelCatalogRemote = { session: { modelCatalog: () => Promise<{ ok: true; value: ModelCatalog } | { ok: false; error: { code: string; message: string } }> } }
 
 function sessionsFace(ctx: ClientContext): SessionsFace {
   return {
@@ -38,6 +40,11 @@ function openSessionOf(ctx: ClientContext): (id: string) => void {
 export function apply(ctx: ClientContext) {
   const scope = ctx.settingsScope.bind<Config>({ namespace: SETTINGS_NAMESPACE })
   const openSession = openSessionOf(ctx)
+  const loadModelCatalog = async (): Promise<ModelCatalog> => {
+    const result = await (ctx.remote as unknown as ModelCatalogRemote).session.modelCatalog()
+    if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
+    return result.value
+  }
 
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     name: 'sidebar.footer.action',
@@ -52,7 +59,7 @@ export function apply(ctx: ClientContext) {
     id: 'messaging',
     order: 14,
     label: '消息',
-    inject: () => ({ scope }),
+    inject: () => ({ scope, loadModelCatalog }),
   }, MessagingSettings))
 
   ctx.effect(() => watchMessagingNavIcon(), 'dsh-messaging-gateway: nav icon')

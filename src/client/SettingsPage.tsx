@@ -1,20 +1,22 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
 import { FEISHU_OPEN_APP_URL, SLACK_CREATE_APP_URL, type Config } from '../config.ts'
 import { bindLabel, platformBind, saveActionLabel, type AccessRow, type GroupRow } from './bind-status.ts'
 import css from './SettingsPage.module.css'
 
 export type MessagingSettingsProps = PropsRuntime<'settings.section'> & {
   scope?: SettingsScope<Config>
+  loadModelCatalog?: () => Promise<ModelCatalog>
 }
 
 export function MessagingSettings(props: MessagingSettingsProps): ReactNode {
   if (props.scope === undefined) return null
-  return <LoadedPage scope={props.scope} />
+  return <LoadedPage scope={props.scope} loadModelCatalog={props.loadModelCatalog} />
 }
 
-function LoadedPage({ scope }: { scope: SettingsScope<Config> }): ReactNode {
+function LoadedPage({ scope, loadModelCatalog }: { scope: SettingsScope<Config>; loadModelCatalog?: () => Promise<ModelCatalog> }): ReactNode {
   const snapshot = useSyncExternalStore(
     listener => scope.subscribe(listener),
     () => scope.getSnapshot(),
@@ -24,11 +26,24 @@ function LoadedPage({ scope }: { scope: SettingsScope<Config> }): ReactNode {
   const [bot, setBot] = useState('')
   const [app, setApp] = useState('')
   const [owner, setOwner] = useState('')
+  const [slackWorkspace, setSlackWorkspace] = useState<string | undefined>()
+  const [slackModel, setSlackModel] = useState<string | undefined>()
+  const [slackEffort, setSlackEffort] = useState<string | undefined>()
   const [feishuAppId, setFeishuAppId] = useState('')
   const [feishuSecret, setFeishuSecret] = useState('')
   const [feishuOwner, setFeishuOwner] = useState('')
+  const [feishuWorkspace, setFeishuWorkspace] = useState<string | undefined>()
+  const [feishuModel, setFeishuModel] = useState<string | undefined>()
+  const [feishuEffort, setFeishuEffort] = useState<string | undefined>()
+  const [saveMessage, setSaveMessage] = useState('')
+  const [models, setModels] = useState<ModelCatalog | undefined>()
+  const [modelError, setModelError] = useState<string | undefined>()
   const [copied, setCopied] = useState(false)
-  const [live, setLive] = useState<{ access?: AccessRow[]; groups?: GroupRow[] }>({})
+  const [live, setLive] = useState<{
+    access?: AccessRow[]
+    groups?: GroupRow[]
+    platforms?: Record<string, { workspaceDir?: string; model?: string }>
+  }>({})
   const settings = snapshot.value
 
   useEffect(() => {
@@ -36,7 +51,7 @@ function LoadedPage({ scope }: { scope: SettingsScope<Config> }): ReactNode {
     const tick = () => {
       void fetch('/plugins/dsh-messaging-gateway/list')
         .then(r => r.json())
-        .then((body: { access?: AccessRow[]; groups?: GroupRow[] }) => {
+        .then((body: { access?: AccessRow[]; groups?: GroupRow[]; platforms?: Record<string, { workspaceDir?: string; model?: string }> }) => {
           if (!cancelled) setLive(body)
         })
         .catch(() => {})
@@ -48,6 +63,16 @@ function LoadedPage({ scope }: { scope: SettingsScope<Config> }): ReactNode {
       window.clearInterval(id)
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void loadModelCatalog?.().then(catalog => {
+      if (!cancelled) setModels(catalog)
+    }).catch(error => {
+      if (!cancelled) setModelError(error instanceof Error ? error.message : String(error))
+    })
+    return () => { cancelled = true }
+  }, [loadModelCatalog])
 
   if (snapshot.status === 'loading' || settings === undefined) {
     return <p className={css.warn}>正在读取 Messaging 设置…</p>
@@ -69,21 +94,47 @@ function LoadedPage({ scope }: { scope: SettingsScope<Config> }): ReactNode {
     ...(live.groups ? { groups: live.groups } : {}),
   })
   const writable = snapshot.writable && !writing
-  const slackDirty = owner.length > 0 || bot.length > 0 || app.length > 0
-  const feishuDirty = feishuOwner.length > 0 || feishuAppId.length > 0 || feishuSecret.length > 0
-  const save = (patch: Partial<Config>) => {
+  const slackDirty = owner.length > 0 || bot.length > 0 || app.length > 0 || slackWorkspace !== undefined || slackModel !== undefined || slackEffort !== undefined
+  const feishuDirty = feishuOwner.length > 0 || feishuAppId.length > 0 || feishuSecret.length > 0 || feishuWorkspace !== undefined || feishuModel !== undefined || feishuEffort !== undefined
+  const slackOwnerReady = Boolean(owner || settings.slackOwner || slack.owner)
+  const feishuOwnerReady = Boolean(feishuOwner || settings.feishuOwner || feishu.owner)
+  const save = (patch: Partial<Config>, reset: () => void) => {
     setWriting(true)
-    const jobs: Promise<unknown>[] = []
-    for (const [key, value] of Object.entries(patch)) {
-      if (typeof value === 'string' && value.length === 0) continue
-      jobs.push(scope.set(key as keyof Config, value as never))
-    }
-    void Promise.all(jobs).finally(() => setWriting(false))
+    setSaveMessage('')
+    const ops = Object.entries(patch).map(([key, value]) => ({ op: 'set' as const, path: [key], value }))
+    void scope.mutate(ops).then(() => { reset(); setSaveMessage('已保存。新会话使用这些默认值；已有会话请在对话中切换，无需先发送消息。') })
+      .catch(error => setSaveMessage(`保存失败：${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => setWriting(false))
+  }
+  const modelOptions = models?.groups.flatMap(group => group.models.map(model => ({
+    value: `${group.id}/${model.id}`,
+    label: `${group.name} · ${model.name}`,
+    reasoning: model.reasoning,
+  }))) ?? []
+  const effortField = (platform: 'slack' | 'feishu', route: string, value: string, setValue: (value: string) => void) => {
+    const reasoning = modelOptions.find(option => option.value === route)?.reasoning
+    return <label className={css.field}>
+      <span className={css.label}>新会话推理强度</span>
+      <select className={css.input} data-mgw={`field-${platform}-effort`} value={value}
+        disabled={!route || !reasoning?.efforts.length} onChange={event => setValue(event.target.value)}>
+        <option value="">{!route ? '跟随 Host 默认模型及推理强度' : `模型默认${reasoning?.defaultEffort ? ` · ${reasoning.defaultEffort}` : ''}`}</option>
+        {value && !reasoning?.efforts.some(effort => effort.id === value) ? <option value={value}>{value}（当前保留）</option> : null}
+        {reasoning?.efforts.map(effort => <option key={effort.id} value={effort.id}>{effort.name}</option>)}
+      </select>
+      <span className={css.hint}>由所选模型提供可用档位。切换模型会重置为该模型默认强度。</span>
+    </label>
+  }
+  const openModelsSettings = () => {
+    const buttons = Array.from(document.querySelectorAll('nav button'))
+    const modelsButton = buttons.find(button => ['模型', 'Models'].includes(button.textContent?.trim() ?? ''))
+    if (modelsButton instanceof HTMLButtonElement) modelsButton.click()
   }
 
   return (
     <section className={css.page} data-mgw="settings" aria-busy={writing}>
       <h2 className={css.heading}>消息</h2>
+      {saveMessage ? <p role="status">{saveMessage}</p> : null}
+      {modelError ? <p role="alert">模型目录读取失败：{modelError}</p> : null}
       <p className={css.intro}>
         Slack 和飞书绑在这台 DSH 上。Computer 只挂主私信；频道 @ 在后台分房间，不进 Recents。
       </p>
@@ -125,8 +176,40 @@ function LoadedPage({ scope }: { scope: SettingsScope<Config> }): ReactNode {
             placeholder="U0123456789"
             autoComplete="off"
           />
-          <span className={css.hint}>你自己的 U…，不是 bot 的。</span>
+          <span className={css.hint}>你自己的 U…，不是 bot 的。只有在本机设置保存它才会确认 Owner；陌生私信不会自动绑定。</span>
         </label>
+        <label className={css.field}>
+          <span className={css.label}>新会话工作目录</span>
+          <input
+            className={css.input}
+            data-mgw="field-slack-cwd"
+            value={slackWorkspace ?? settings.slackWorkspaceDir ?? ''}
+            onChange={event => setSlackWorkspace(event.target.value)}
+            placeholder={live.platforms?.slack?.workspaceDir || '$DSH_HOME/messaging-gateway/workspaces/slack'}
+            autoComplete="off"
+          />
+          <span className={css.hint}>必须是绝对路径。默认与飞书隔离；两边填同一路径才会显式共享。已有会话不会迁移。</span>
+        </label>
+        <label className={css.field}>
+          <span className={css.label}>新会话模型</span>
+          <select
+            className={css.input}
+            data-mgw="field-slack-model"
+            value={slackModel ?? settings.slackModel ?? ''}
+            onChange={event => { setSlackModel(event.target.value); setSlackEffort('') }}
+          >
+            <option value="">跟随 Host 默认{models?.default ? ` · ${models.default.provider}/${models.default.model}` : ''}</option>
+            {settings.slackModel && !modelOptions.some(option => option.value === settings.slackModel)
+              ? <option value={settings.slackModel}>{settings.slackModel}（当前保留）</option>
+              : null}
+            {modelOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <span className={css.hint}>只列出当前 Host 已登录、已配置且可用的模型。</span>
+        </label>
+        {effortField('slack', slackModel ?? settings.slackModel ?? '', slackEffort ?? settings.slackReasoningEffort ?? '', setSlackEffort)}
+        {modelOptions.length === 0 || modelError ? (
+          <button type="button" className={css.ghost} data-mgw="open-model-settings" onClick={openModelsSettings}>打开模型 / OAuth 设置</button>
+        ) : null}
         <label className={css.field}>
           <span className={css.label}>Bot token</span>
           <input
@@ -170,14 +253,19 @@ function LoadedPage({ scope }: { scope: SettingsScope<Config> }): ReactNode {
             type="button"
             className={css.primary}
             data-mgw="save-bind"
-            disabled={!writable || (slack.bound && !slackDirty)}
+            disabled={!writable || !slackOwnerReady || (slack.bound && !slackDirty)}
             onClick={() => {
               const patch: Partial<Config> = { enabled: true }
               const nextOwner = owner || settings.slackOwner
               if (nextOwner) patch.slackOwner = nextOwner
+              if (slackWorkspace !== undefined) patch.slackWorkspaceDir = slackWorkspace
+              if (slackModel !== undefined) patch.slackModel = slackModel
+              if (slackEffort !== undefined) patch.slackReasoningEffort = slackEffort
               if (bot) patch.slackBotToken = bot
               if (app) patch.slackAppToken = app
-              save(patch)
+              save(patch, () => {
+                setOwner(''); setBot(''); setApp(''); setSlackWorkspace(undefined); setSlackModel(undefined); setSlackEffort(undefined)
+              })
             }}
           >
             {saveActionLabel({ bound: slack.bound, dirty: slackDirty, writing })}
@@ -215,8 +303,40 @@ function LoadedPage({ scope }: { scope: SettingsScope<Config> }): ReactNode {
             placeholder="ou_…"
             autoComplete="off"
           />
-          <span className={css.hint}>你自己的 ou_…，不是机器人的。</span>
+          <span className={css.hint}>你自己的 ou_…，不是机器人的。只有在本机设置保存它才会确认 Owner。</span>
         </label>
+        <label className={css.field}>
+          <span className={css.label}>新会话工作目录</span>
+          <input
+            className={css.input}
+            data-mgw="field-feishu-cwd"
+            value={feishuWorkspace ?? settings.feishuWorkspaceDir ?? ''}
+            onChange={event => setFeishuWorkspace(event.target.value)}
+            placeholder={live.platforms?.feishu?.workspaceDir || '$DSH_HOME/messaging-gateway/workspaces/feishu'}
+            autoComplete="off"
+          />
+          <span className={css.hint}>必须是绝对路径。默认与 Slack 隔离；显式填写同一路径可共享。已有会话 cwd 保持不变。</span>
+        </label>
+        <label className={css.field}>
+          <span className={css.label}>新会话模型</span>
+          <select
+            className={css.input}
+            data-mgw="field-feishu-model"
+            value={feishuModel ?? settings.feishuModel ?? ''}
+            onChange={event => { setFeishuModel(event.target.value); setFeishuEffort('') }}
+          >
+            <option value="">跟随 Host 默认{models?.default ? ` · ${models.default.provider}/${models.default.model}` : ''}</option>
+            {settings.feishuModel && !modelOptions.some(option => option.value === settings.feishuModel)
+              ? <option value={settings.feishuModel}>{settings.feishuModel}（当前保留）</option>
+              : null}
+            {modelOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <span className={css.hint}>模型来自当前 Host 的实际目录，不手填未知路由。</span>
+        </label>
+        {effortField('feishu', feishuModel ?? settings.feishuModel ?? '', feishuEffort ?? settings.feishuReasoningEffort ?? '', setFeishuEffort)}
+        {modelOptions.length === 0 || modelError ? (
+          <button type="button" className={css.ghost} data-mgw="open-model-settings" onClick={openModelsSettings}>打开模型 / OAuth 设置</button>
+        ) : null}
         <label className={css.field}>
           <span className={css.label}>App ID</span>
           <input
@@ -246,15 +366,20 @@ function LoadedPage({ scope }: { scope: SettingsScope<Config> }): ReactNode {
             type="button"
             className={css.primary}
             data-mgw="save-feishu"
-            disabled={!writable || (feishu.bound && !feishuDirty)}
+            disabled={!writable || !feishuOwnerReady || (feishu.bound && !feishuDirty)}
             onClick={() => {
               const patch: Partial<Config> = { enabled: true }
               const nextOwner = feishuOwner || settings.feishuOwner || feishu.owner
               const nextId = feishuAppId || settings.feishuAppId
               if (nextOwner) patch.feishuOwner = nextOwner
+              if (feishuWorkspace !== undefined) patch.feishuWorkspaceDir = feishuWorkspace
+              if (feishuModel !== undefined) patch.feishuModel = feishuModel
+              if (feishuEffort !== undefined) patch.feishuReasoningEffort = feishuEffort
               if (nextId) patch.feishuAppId = nextId
               if (feishuSecret) patch.feishuAppSecret = feishuSecret
-              save(patch)
+              save(patch, () => {
+                setFeishuOwner(''); setFeishuAppId(''); setFeishuSecret(''); setFeishuWorkspace(undefined); setFeishuModel(undefined); setFeishuEffort(undefined)
+              })
             }}
           >
             {saveActionLabel({ bound: feishu.bound, dirty: feishuDirty, writing })}

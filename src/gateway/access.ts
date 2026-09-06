@@ -25,13 +25,6 @@ export function decideAccess(args: {
 }): { decision: AccessDecision; access: PlatformAccess; pairingSeq: number } {
   const { access, actor, addressing, identity, at, pairingSeq } = args
   if (access.kind === 'unbound') {
-    if (addressing.kind === 'dm') {
-      return {
-        decision: { kind: 'owner' },
-        access: { kind: 'bound', owner: actor, allowlist: [], guests: [], pending: [] },
-        pairingSeq,
-      }
-    }
     return { decision: { kind: 'deny' }, access, pairingSeq }
   }
 
