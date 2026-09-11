@@ -13,6 +13,7 @@
     "rewriteRelativeImportExtensions": true,
     "verbatimModuleSyntax": false,
     "strict": true,
+    "types": ["node"],
     "jsx": "react-jsx",
   },
   "include": [

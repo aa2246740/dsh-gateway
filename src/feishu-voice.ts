@@ -95,10 +95,24 @@ export function splitFirstSpoken(text: string): { first: string; rest: string } 
 }
 
 export function assistantChunkTextFromEvent(event: { type: string; data?: unknown }): string {
-  if (event.type !== 'assistant/chunk' || event.data === null || typeof event.data !== 'object') return ''
-  const chunk = (event.data as { chunk?: { type?: unknown; text?: unknown } }).chunk
-  if (!chunk || chunk.type !== 'text-delta' || typeof chunk.text !== 'string') return ''
-  return chunk.text
+  if (event.type !== 'assistant/attempt' || event.data === null || typeof event.data !== 'object') return ''
+  const stream = (event.data as { stream?: unknown }).stream
+  if (!Array.isArray(stream)) return ''
+  const parts: string[] = []
+  for (const record of stream) {
+    if (record === null || typeof record !== 'object') continue
+    const row = record as { type?: unknown; texts?: unknown; chunk?: { type?: unknown; text?: unknown } }
+    if (row.type === 'text-chunks' && Array.isArray(row.texts)) {
+      for (const text of row.texts) {
+        if (typeof text === 'string' && text.length > 0) parts.push(text)
+      }
+      continue
+    }
+    if (row.type === 'chunk' && row.chunk?.type === 'text-delta' && typeof row.chunk.text === 'string') {
+      parts.push(row.chunk.text)
+    }
+  }
+  return parts.join('')
 }
 
 type SystemPromptFace = {

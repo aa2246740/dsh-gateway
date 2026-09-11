@@ -68,7 +68,6 @@ function catalog(state) {
 
 function recordingCtx(sections, listeners) {
   return {
-    agent: { id: 'session-test' },
     systemPrompt: {
       section: section => { sections.push(section) },
       getSectionOrder: name => name === 'DEPLOYMENT_PERSONA' ? 0 : 50,
@@ -95,9 +94,9 @@ function fakeAgents(created, sections, listeners) {
     create: async opts => {
       created.push(opts)
       const ctx = recordingCtx(sections, listeners)
-      ctx.agent = { id: opts.sessionId }
-      opts.setup?.(ctx)
-      return { agent: { followup: () => {}, cancel: () => {}, ctx }, dispose: () => {} }
+      const agent = { id: opts.sessionId, followup: () => {}, cancel: () => {}, ctx }
+      opts.setup?.(ctx, agent)
+      return { agent, dispose: () => {} }
     },
     resume: async () => { throw new Error('resume should not run') },
   }
@@ -386,15 +385,15 @@ test('Feishu sends the first spoken sentence early; the rest of a digest stays o
     const hostId = Object.values(runtime.state.sessions)[0].host.hostSessionId
     runtime.noteAgentStatus(hostId, 'running')
     runtime.noteSessionEvent(hostId, {
-      type: 'assistant/chunk',
-      data: { chunk: { type: 'text-delta', text: ack } },
+      type: 'assistant/attempt',
+      data: { stream: [{ type: 'chunk', time: 0, chunk: { type: 'text-delta', text: ack } }] },
     })
     const beforeRest = posted.filter(d => d.kind === 'chat' && d.body.kind === 'stream' && d.body.snapshot?.text)
       .map(d => d.body.snapshot.text)
     assert.deepEqual(beforeRest, [ack])
     runtime.noteSessionEvent(hostId, {
-      type: 'assistant/chunk',
-      data: { chunk: { type: 'text-delta', text: digest } },
+      type: 'assistant/attempt',
+      data: { stream: [{ type: 'chunk', time: 0, chunk: { type: 'text-delta', text: digest } }] },
     })
     const mid = posted.filter(d => d.kind === 'chat' && d.body.kind === 'stream' && d.body.snapshot?.text)
       .map(d => d.body.snapshot.text)

@@ -14,9 +14,8 @@ export function currentSessionModel(ctx: Context, id: string): ModelPick | undef
 }
 
 /** Gateway agents can run before the desktop has opened them. No private cache. */
-export function installSessionModel(ctx: Context): void {
-  const agent = ctx.agent
-  if (!agent) throw new Error('Messaging model selection requires an Agent scope')
+export function installSessionModel(ctx: Context, agent: { readonly id: unknown }): void {
+  if (agent.id === undefined || agent.id === null) throw new Error('Messaging model selection requires an Agent scope')
   installModelSelection(ctx, {
     get current() {
       const pick = currentSessionModel(ctx, String(agent.id))
