@@ -38,6 +38,7 @@ import {
 } from './feishu-voice.ts'
 
 export type AgentFace = {
+  id?: unknown
   followup: (message: ReturnType<typeof createUserMessage>) => void
   cancel: (cause: { kind: 'user' }) => void
   ctx?: Context
@@ -57,7 +58,7 @@ export type AgentOptionsFace = {
  * doing so makes it collide with a same-named command supplied by the core
  * product (for example, the built-in `/model`).
  */
-export type AgentSetup = (agentCtx: Context) => void
+export type AgentSetup = (agentCtx: Context, agent?: AgentFace) => void
 
 export type HostAgents = {
   get: (id: ReturnType<typeof SessionId>) => AgentFace | undefined
@@ -65,17 +66,17 @@ export type HostAgents = {
     sessionId: ReturnType<typeof SessionId>
     meta?: { cwd?: string }
     agentOptions?: AgentOptionsFace
-    setup?: (agentCtx: Context) => void
+    setup?: AgentSetup
   }) => Promise<{ agent: AgentFace; dispose: () => void }>
   resume: (opts: {
     resumeSessionId: ReturnType<typeof SessionId>
     agentOptions?: AgentOptionsFace
-    setup?: (agentCtx: Context) => void
+    setup?: AgentSetup
   }) => Promise<{ agent: AgentFace; dispose: () => void }>
 }
 
 export type HostCommands = {
-  execute: (agent: AgentFace, line: string, images: never[], signal: AbortSignal) => Promise<{ result?: { kind: string; text?: string } } | undefined>
+  execute: (agent: AgentFace, line: string, attachments: never[], signal: AbortSignal) => Promise<{ result?: { kind: string; text?: string } } | undefined>
   list: (agent: AgentFace) => { name: string; description: string }[]
 }
 
@@ -566,14 +567,14 @@ export class GatewayRuntime {
   private agentSetup(
     pick: { provider: string; model: string } | undefined,
     opts?: { chatFeel?: boolean; feishuCards?: boolean },
-  ): ((agentCtx: Context) => void) | undefined {
+  ): AgentSetup | undefined {
     const chatFeel = opts?.chatFeel === true
     const feishuCards = opts?.feishuCards === true
     if (!pick && this.setupAgent === undefined && !chatFeel && !feishuCards) return undefined
-    return agentCtx => {
-      this.setupAgent?.(agentCtx)
-      this.installGatewayChatHooks(agentCtx, { chatFeel, feishuCards })
-      const id = agentCtx.agent?.id
+    return (agentCtx, agent) => {
+      this.setupAgent?.(agentCtx, agent)
+      this.installGatewayChatHooks(agentCtx, { chatFeel, feishuCards }, agent)
+      const id = agent?.id
       if (id !== undefined) this.configured.add(String(id))
     }
   }
@@ -610,11 +611,12 @@ export class GatewayRuntime {
   private installGatewayChatHooks(
     agentCtx: Context,
     opts: { chatFeel: boolean; feishuCards: boolean },
+    agent?: AgentFace,
   ): void {
     if (opts.chatFeel) installFeishuSpeakingContract(agentCtx)
     if (!opts.feishuCards) return
     installFeishuApprovalHold(agentCtx, (request, next) => {
-      const hostId = String((agentCtx as Context & { agent?: { id?: unknown } }).agent?.id ?? request.agent?.id ?? '')
+      const hostId = String(agent?.id ?? request.agent?.id ?? '')
       return this.holdFeishuApproval(hostId, request, next)
     })
   }
@@ -660,7 +662,7 @@ export class GatewayRuntime {
   }
 
   /** Return the complete setup used for a messaging-owned Agent. */
-  setupForAgent(hostId?: string): ((agentCtx: Context) => void) | undefined {
+  setupForAgent(hostId?: string): AgentSetup | undefined {
     const pick = hostId === undefined ? this.modelFor() : this.modelFor(hostId)
     const key = hostId === undefined ? undefined : this.keyForHost(hostId)
     return this.agentSetup(pick, this.feelOpts(key))
@@ -676,11 +678,11 @@ export class GatewayRuntime {
     if (this.configured.has(hostId)) return
     const agent = this.agents.get(SessionId(hostId))
     if (!agent?.ctx) return
-    this.setupAgent?.(agent.ctx)
+    this.setupAgent?.(agent.ctx, agent)
     this.installGatewayChatHooks(agent.ctx, {
       chatFeel: this.hostWantsChatFeel(hostId),
       feishuCards: this.hostIsFeishu(hostId),
-    })
+    }, agent)
     this.configured.add(hostId)
   }
 

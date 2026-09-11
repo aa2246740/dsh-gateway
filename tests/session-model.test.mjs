@@ -8,12 +8,12 @@ test('next gateway request reads desktop durable selection without a desktop mes
   let state = { pending: { provider: 'fixture', model: 'a', reasoningEffort: 'low' }, lastUsed: null }
   const session = {}
   const hooks = new Map()
+  const agent = { id: 'fixture' }
   const ctx = {
-    agent: { id: 'fixture' },
     get: name => ({ sessions: { get: () => session }, sessionProjections: { stateOf: () => state } })[name],
     on: (name, handler) => { hooks.set(name, handler); return () => {} },
   }
-  installSessionModel(ctx)
+  installSessionModel(ctx, agent)
   const request = async () => {
     await hooks.get('system-prompt/assemble')({}, {}, async () => ({ variables: {} }))
     return hooks.get('agent/request')({}, async () => ({ provider: 'stale', model: 'stale', reasoningEffort: 'medium' }))
@@ -22,7 +22,7 @@ test('next gateway request reads desktop durable selection without a desktop mes
   state = { ...state, pending: { provider: 'fixture', model: 'b', reasoningEffort: 'high' } }
   assert.deepEqual(await request(), state.pending)
   state = { pending: null, lastUsed: state.pending }
-  installSessionModel(ctx) // simulate recreated agent using persisted projection
+  installSessionModel(ctx, agent) // simulate recreated agent using persisted projection
   assert.deepEqual(await request(), state.lastUsed)
   state = { ...state, pending: { provider: 'fixture', model: 'plain' } }
   assert.deepEqual(await request(), state.pending)

@@ -37,7 +37,7 @@ type CommandHost = {
   register: (definition: {
     name: string
     description: string
-    input?: { hint: string; images: boolean }
+    input?: { hint: string; attachments?: boolean }
     handler: (invocation: { agent: { id: unknown }; rawInput: string }) => Promise<{ kind: 'success' | 'error'; text: string }>
   }) => () => void
 }
@@ -251,7 +251,7 @@ export function apply(ctx: Context, config: GatewayConfig) {
   const registerModel = (commandHost: CommandHost) => commandHost.register({
     name: 'model',
     description: 'Show or switch this session model',
-    input: { hint: '[provider/model [effort] | effort <level>]', images: false },
+    input: { hint: '[provider/model [effort] | effort <level>]', attachments: false },
     handler: async invocation => {
       const key = String(invocation.agent.id)
       const llm = getLlm()
@@ -273,8 +273,9 @@ export function apply(ctx: Context, config: GatewayConfig) {
     },
   })
 
-  const setupAgent = (agentCtx: Context): void => {
-    installSessionModel(agentCtx)
+  const setupAgent = (agentCtx: Context, agent?: { readonly id?: unknown }): void => {
+    if (agent?.id === undefined || agent.id === null) throw new Error('Messaging model selection requires an Agent scope')
+    installSessionModel(agentCtx, { id: agent.id })
     const commandHost = agentCtx.get('commands') as CommandHost | undefined
     if (!commandHost) return
     agentCtx.effect(() => registerModel(commandHost), 'dsh-messaging-gateway: /model')
