@@ -25,6 +25,18 @@
     "type": "git",
     "url": "git+https://github.com/aa2246740/dsh-gateway.git"
   },
+  "homepage": "https://github.com/aa2246740/dsh-gateway#readme",
+  "bugs": {
+    "url": "https://github.com/aa2246740/dsh-gateway/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "slack",
+    "feishu",
+    "messaging"
+  ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

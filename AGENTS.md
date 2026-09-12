@@ -13,17 +13,22 @@ Read [README.md](README.md) before installing or pairing. This file is the machi
 
 ## Install
 
-Default: official `dsh`.
+Default for stock DeepSeek Harness **0.1.5-rc.2**: official `dsh`. Those users have no Creator Mode and no DSHX. **pnpm** must be on PATH.
 
 ```sh
 dsh plugin --profile web add github:aa2246740/dsh-gateway
 ```
 
-From a local clone: `dsh plugin --profile web add ./dsh-gateway`.
+If `dsh` is not on PATH: `npx @deepseek-ai/dsh plugin --profile web add github:aa2246740/dsh-gateway`.
 
-Then the human restarts that Host and reloads the page.
+This package declares `dsh.bundle.patch` and commits `lib/`, so the git spec boots without a `prepare` script (pnpm ≥10 would otherwise block that script until `allowBuilds`).
 
-If dshx is already on the machine, feed the agent https://github.com/aa2246740/dsh-external-plugin-devkit and this repo.
+Then the human restarts that Host and reloads the page. `dsh plugin add` only writes the profile.
+
+From a local clone: `dsh plugin --profile web add file:./dsh-gateway`.
+
+Do not send stock users through DSHX, Creator Mode, or `my-plugins`.
+
 
 ## Pair
 
