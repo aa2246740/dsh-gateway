@@ -4,7 +4,7 @@
 dsh plugin --profile web add github:aa2246740/dsh-gateway
 ```
 
-需要官方 DeepSeek Harness **0.1.5-rc.2**（`dsh` 或 `npx @deepseek-ai/dsh`），以及 PATH 上的 **pnpm**。这条命令在 `$DSH_HOME/profiles/web` 里跑 pnpm，把声明了 `dsh.bundle.patch` 的包装进 web profile。仓库已提交 `lib/`，git 安装不跑 `prepare`。然后**重启这个 Host，刷新页面**。`dsh plugin add` 只写 profile，不会热挂正在跑的进程。
+需要官方 DeepSeek Harness **0.1.5-rc.3**（tag `dsh-v0.1.5-rc.3`，npm `@deepseek-ai/dsh@0.1.5-rc.3`；`dsh` 或 `npx @deepseek-ai/dsh@0.1.5-rc.3`），以及 PATH 上的 **pnpm**。这条命令在 `$DSH_HOME/profiles/web` 里跑 pnpm，把声明了 `dsh.bundle.patch` 的包装进 web profile。仓库已提交 `lib/`，git 安装不跑 `prepare`。然后**重启这个 Host，刷新页面**。`dsh plugin add` 只写 profile，不会热挂正在跑的进程。
 
 `dsh` 不在 PATH 时：
 
