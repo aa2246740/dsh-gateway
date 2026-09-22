@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
+
+const require = createRequire(import.meta.url)
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
@@ -42,4 +45,38 @@ test('AGENTS.md keeps official dsh as the stock install default', () => {
   assert.match(defaultBlock, /dsh plugin --profile web add github:aa2246740\/dsh-gateway/)
   assert.match(defaultBlock, /\bpnpm\b/)
   assert.match(defaultBlock, /Do not send stock users through DSHX/)
+  assert.match(defaultBlock, /0\.1\.5-rc\.3/)
+  assert.doesNotMatch(defaultBlock, /0\.1\.7-alpha/)
+})
+
+const HARNESS_PEERS = [
+  '@deepseek-ai/dsh-agent',
+  '@deepseek-ai/dsh-api-session-controller',
+  '@deepseek-ai/dsh-client-ui-layout',
+  '@deepseek-ai/dsh-client-connection',
+  '@deepseek-ai/dsh-client-ui-renderer',
+  '@deepseek-ai/dsh-client-ui-settings',
+  '@deepseek-ai/dsh-client-ui-sidebar',
+  '@deepseek-ai/dsh-client-ui-slots',
+  '@deepseek-ai/dsh-llm',
+  '@deepseek-ai/dsh-session',
+  '@deepseek-ai/dsh-settings',
+]
+
+test('Harness peers accept 0.1.5-rc.3 and reject 0.1.7 alphas', () => {
+  const semver = require('semver')
+  for (const name of HARNESS_PEERS) {
+    const range = pkg.peerDependencies[name]
+    assert.equal(range, '^0.1.5-rc.3', name)
+    assert.equal(pkg.devDependencies[name], range, name)
+    assert.equal(semver.satisfies('0.1.5-rc.3', range), true, name)
+    assert.equal(semver.satisfies('0.1.5-rc.2', range), false, `${name} must not treat rc.2 as this target`)
+    assert.equal(semver.satisfies('0.1.2-rc.1', '^0.1.2-rc.1'), true)
+    assert.equal(semver.satisfies('0.1.5-rc.3', '^0.1.2-rc.1'), false, 'old caret must stay a known miss')
+    assert.equal(semver.satisfies('0.1.7-alpha.1', range), false, name)
+    assert.equal(semver.satisfies('0.1.7-alpha.2', range), false, name)
+  }
+  assert.match(readme, /0\.1\.5-rc\.3/)
+  assert.match(readme, /@deepseek-ai\/dsh@0\.1\.5-rc\.3/)
+  assert.doesNotMatch(readme, /0\.1\.7-alpha/)
 })

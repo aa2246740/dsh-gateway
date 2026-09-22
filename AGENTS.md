@@ -13,7 +13,7 @@ Read [README.md](README.md) before installing or pairing. This file is the machi
 
 ## Install
 
-Default for stock DeepSeek Harness **0.1.5-rc.2**: official `dsh`. Those users have no Creator Mode and no DSHX. **pnpm** must be on PATH.
+Default for stock DeepSeek Harness **0.1.5-rc.3** (`dsh-v0.1.5-rc.3`, npm `@deepseek-ai/dsh@0.1.5-rc.3`): official `dsh`. Those users have no Creator Mode and no DSHX. **pnpm** must be on PATH. Peer ranges are `^0.1.5-rc.3` because `^0.1.2-rc.1` does not accept `0.1.5-rc.3`. Do not target `0.1.7` alphas.
 
 ```sh
 dsh plugin --profile web add github:aa2246740/dsh-gateway
