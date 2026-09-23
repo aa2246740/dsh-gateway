@@ -7,7 +7,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import z from '@deepseek-ai/schemastery'
-import { parseConfiguredModel, SETTINGS_NAMESPACE, type Config as GatewayConfig } from './config.ts'
+import { parseConfiguredModel, type Config as GatewayConfig, type LiveConfig } from './config.ts'
 import { isMainConversation, platformId, subjectId } from './gateway/index.ts'
 import { mergeUserSkills, skillListViews, slashesFromCatalog } from './host-catalog.ts'
 import { formatModelStatus, resolveModelPick, type LlmFace } from './model-command.ts'
@@ -135,22 +135,51 @@ function placeBoundSessions(
 export const name = 'dsh-messaging-gateway'
 export const inject = ['agents', 'commands', 'sessionController']
 
-export const Config: z<GatewayConfig> = z.object({
-  enabled: z.boolean().default(true),
-  workspaceDir: z.string().default(''),
-  slackWorkspaceDir: z.string().default(''),
-  slackModel: z.string().default(''),
-  slackReasoningEffort: z.string().default(''),
-  slackBotToken: z.string().role('secret').default(''),
-  slackAppToken: z.string().role('secret').default(''),
-  slackOwner: z.string().default(''),
-  feishuWorkspaceDir: z.string().default(''),
-  feishuModel: z.string().default(''),
-  feishuReasoningEffort: z.string().default(''),
-  feishuAppId: z.string().default(''),
-  feishuAppSecret: z.string().role('secret').default(''),
-  feishuOwner: z.string().default(''),
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    /**
+     * Volatile config values were committed into the running fiber without a remount.
+     * @param paths changed config paths; every value is committed before dispatch.
+     */
+    'loader/volatile-update'(paths: readonly (readonly string[])[]): void
+  }
+}
+
+export const Config = z.object({
+  enabled: z.boolean().default(true).volatile(),
+  workspaceDir: z.string().default('').volatile(),
+  slackWorkspaceDir: z.string().default('').volatile(),
+  slackModel: z.string().default('').volatile(),
+  slackReasoningEffort: z.string().default('').volatile(),
+  slackBotToken: z.string().role('secret').default('').volatile(),
+  slackAppToken: z.string().role('secret').default('').volatile(),
+  slackOwner: z.string().default('').volatile(),
+  feishuWorkspaceDir: z.string().default('').volatile(),
+  feishuModel: z.string().default('').volatile(),
+  feishuReasoningEffort: z.string().default('').volatile(),
+  feishuAppId: z.string().default('').volatile(),
+  feishuAppSecret: z.string().role('secret').default('').volatile(),
+  feishuOwner: z.string().default('').volatile(),
 })
+
+function readLive(config: LiveConfig): GatewayConfig {
+  return {
+    enabled: config.enabled.get(),
+    workspaceDir: config.workspaceDir.get(),
+    slackWorkspaceDir: config.slackWorkspaceDir.get(),
+    slackModel: config.slackModel.get(),
+    slackReasoningEffort: config.slackReasoningEffort.get(),
+    slackBotToken: config.slackBotToken.get(),
+    slackAppToken: config.slackAppToken.get(),
+    slackOwner: config.slackOwner.get(),
+    feishuWorkspaceDir: config.feishuWorkspaceDir.get(),
+    feishuModel: config.feishuModel.get(),
+    feishuReasoningEffort: config.feishuReasoningEffort.get(),
+    feishuAppId: config.feishuAppId.get(),
+    feishuAppSecret: config.feishuAppSecret.get(),
+    feishuOwner: config.feishuOwner.get(),
+  }
+}
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status
@@ -214,7 +243,7 @@ export function confirmOwnerFromSettings(runtime: GatewayRuntime, platform: stri
   })
 }
 
-export function apply(ctx: Context, config: GatewayConfig) {
+export function apply(ctx: Context, config: LiveConfig) {
   const workspaceDirs = new Map<string, string>()
   const workspaceDirFor = (platform: string): string => {
     const cached = workspaceDirs.get(platform)
@@ -230,7 +259,7 @@ export function apply(ctx: Context, config: GatewayConfig) {
     workspaceDirs.set(platform, directory)
     return directory
   }
-  let source = () => config
+  let source = () => readLive(config)
   let instance: ReturnType<typeof acquireGatewayInstanceLease>
   try {
     instance = acquireGatewayInstanceLease()
@@ -412,19 +441,17 @@ export function apply(ctx: Context, config: GatewayConfig) {
     })
   })
 
-  bindOwner('slack', config.slackOwner ?? '')
-  bindOwner('feishu', config.feishuOwner ?? '')
+  bindOwner('slack', source().slackOwner ?? '')
+  bindOwner('feishu', source().feishuOwner ?? '')
 
   ctx.inject(['settings'], settingsCtx => {
-    settingsCtx.settings.installSection(ctx, SETTINGS_NAMESPACE, Config, config, {
-      setSource: current => { source = current },
-      onChange: () => {
-        workspaceDirs.clear()
-        syncSlack()
-        syncFeishu()
-      },
-    })
+    settingsCtx.effect(() => settingsCtx.settings.configure({ auto: false }, ctx.fiber), 'dsh-messaging-gateway: settings page')
   })
+  ctx.effect(() => ctx.on('loader/volatile-update', () => {
+    workspaceDirs.clear()
+    syncSlack()
+    syncFeishu()
+  }), 'dsh-messaging-gateway: live settings')
 
   type WebServer = {
     register: (route: { kind: 'exact' | 'prefix'; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void }) => () => void

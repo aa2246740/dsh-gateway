@@ -1,13 +1,13 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
 import { FEISHU_OPEN_APP_URL, SLACK_CREATE_APP_URL, type Config } from '../config.ts'
 import { bindLabel, platformBind, saveActionLabel, type AccessRow, type GroupRow } from './bind-status.ts'
 import css from './SettingsPage.module.css'
 
 export type MessagingSettingsProps = PropsRuntime<'settings.section'> & {
-  scope?: SettingsScope<Config>
+  scope?: ConfigForm<Config>
   loadModelCatalog?: () => Promise<ModelCatalog>
 }
 
@@ -16,7 +16,7 @@ export function MessagingSettings(props: MessagingSettingsProps): ReactNode {
   return <LoadedPage scope={props.scope} loadModelCatalog={props.loadModelCatalog} />
 }
 
-function LoadedPage({ scope, loadModelCatalog }: { scope: SettingsScope<Config>; loadModelCatalog?: () => Promise<ModelCatalog> }): ReactNode {
+function LoadedPage({ scope, loadModelCatalog }: { scope: ConfigForm<Config>; loadModelCatalog?: () => Promise<ModelCatalog> }): ReactNode {
   const snapshot = useSyncExternalStore(
     listener => scope.subscribe(listener),
     () => scope.getSnapshot(),
@@ -102,7 +102,14 @@ function LoadedPage({ scope, loadModelCatalog }: { scope: SettingsScope<Config>;
     setWriting(true)
     setSaveMessage('')
     const ops = Object.entries(patch).map(([key, value]) => ({ op: 'set' as const, path: [key], value }))
-    void scope.mutate(ops).then(() => { reset(); setSaveMessage('已保存。新会话使用这些默认值；已有会话请在对话中切换，无需先发送消息。') })
+    void scope.mutate(ops).then(accepted => {
+      if (!accepted) {
+        setSaveMessage('保存失败：Host 没有接受这次写入。')
+        return
+      }
+      reset()
+      setSaveMessage('已保存。新会话使用这些默认值；已有会话请在对话中切换，无需先发送消息。')
+    })
       .catch(error => setSaveMessage(`保存失败：${error instanceof Error ? error.message : String(error)}`))
       .finally(() => setWriting(false))
   }

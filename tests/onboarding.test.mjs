@@ -26,7 +26,7 @@ function response() {
 function fakeHost() {
   const routes = new Map()
   const disposers = []
-  let settingsHooks
+  const volatile = []
   const services = {
     commands: { list: () => [], execute: async () => undefined },
     sessions: { list: () => [], get: () => undefined },
@@ -50,7 +50,10 @@ function fakeHost() {
       resume: async () => { throw new Error('plugin apply must not resume a session') },
     },
     get: name => services[name],
-    on: () => () => {},
+    on(event, listener) {
+      if (event === 'loader/volatile-update') volatile.push(listener)
+      return () => {}
+    },
     effect(factory) {
       const dispose = factory()
       if (typeof dispose === 'function') disposers.push(dispose)
@@ -59,15 +62,30 @@ function fakeHost() {
     inject(dependencies, callback) {
       if (dependencies.every(name => name === 'settings' || services[name] !== undefined)) callback(ctx)
     },
+    fiber: { id: 'dsh-messaging-gateway' },
     settings: {
-      installSection(_owner, _namespace, _schema, config, hooks) {
-        settingsHooks = hooks
-        hooks.setSource(() => config)
-        return () => {}
-      },
+      configure() { return () => {} },
     },
   }
-  return { ctx, routes, get settingsHooks() { return settingsHooks }, dispose: () => disposers.reverse().forEach(fn => fn()) }
+  return {
+    ctx,
+    routes,
+    emitVolatile() { for (const listener of volatile) listener([]) },
+    dispose: () => disposers.reverse().forEach(fn => fn()),
+  }
+}
+
+function liveConfig(values) {
+  const keys = [
+    'workspaceDir', 'slackWorkspaceDir', 'slackModel', 'slackReasoningEffort',
+    'slackBotToken', 'slackAppToken', 'slackOwner',
+    'feishuWorkspaceDir', 'feishuModel', 'feishuReasoningEffort',
+    'feishuAppId', 'feishuAppSecret', 'feishuOwner',
+  ]
+  const current = { enabled: true, ...values }
+  const config = { enabled: { get: () => current.enabled !== false } }
+  for (const key of keys) config[key] = { get: () => current[key] ?? '' }
+  return { config, current }
 }
 
 function fakeSlackMessage(sequence, text) {
@@ -94,14 +112,14 @@ test('authenticated Settings configures a new fake platform while old state rema
   delete process.env.MESSAGING_GATEWAY_STATE
   process.env.MESSAGING_GATEWAY_DISABLE_SLACK = '1'
   process.env.MESSAGING_GATEWAY_DISABLE_FEISHU = '1'
-  const config = {
+  const { config, current } = liveConfig({
     enabled: true,
     slackBotToken: 'xoxb-test-fixture-not-production',
     slackAppToken: 'xapp-test-fixture-not-production',
     slackOwner: '',
     slackWorkspaceDir: join(home, 'chosen-slack'),
     slackModel: 'fake-provider/fake-model',
-  }
+  })
   const host = fakeHost()
   try {
     apply(host.ctx, config)
@@ -112,8 +130,8 @@ test('authenticated Settings configures a new fake platform while old state rema
     list.handler({ method: 'GET', headers: { host: '127.0.0.1' } }, denied)
     assert.equal(denied.state.status, 401)
 
-    config.slackOwner = 'U-local-owner'
-    host.settingsHooks.onChange()
+    current.slackOwner = 'U-local-owner'
+    host.emitVolatile()
     const allowed = response()
     list.handler({ method: 'GET', headers: { host: '127.0.0.1', cookie: 'dsh-test=authenticated' } }, allowed)
     assert.equal(allowed.state.status, 200)
@@ -132,8 +150,8 @@ test('authenticated Settings configures a new fake platform while old state rema
         },
         resume: async () => { throw new Error('new user must create first session') },
       },
-      cwd: platform => resolvePlatformWorkspaceDir(platform, config.slackWorkspaceDir, config.workspaceDir, home),
-      defaultModel: platform => platform === 'slack' ? parseConfiguredModel(config.slackModel) : undefined,
+      cwd: platform => resolvePlatformWorkspaceDir(platform, current.slackWorkspaceDir, current.workspaceDir, home),
+      defaultModel: platform => platform === 'slack' ? parseConfiguredModel(current.slackModel) : undefined,
     })
     await runtime.run(fakeSlackMessage(1, 'hello fake platform'))
     assert.equal(created.length, 1)
