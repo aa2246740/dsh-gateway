@@ -1,3 +1,6 @@
+import type { Volatile } from '@deepseek-ai/cordis'
+
+/** Wire values the settings page reads. Secrets are redacted before they arrive. */
 export interface Config {
   enabled?: boolean
   /** Legacy shared workspace. Kept so existing installations do not move. */
@@ -14,6 +17,24 @@ export interface Config {
   feishuAppId?: string
   feishuAppSecret?: string
   feishuOwner?: string
+}
+
+/** Host Config. Each field is a live profile reference; read it with `.get()`. */
+export interface LiveConfig {
+  enabled: Volatile<boolean>
+  workspaceDir: Volatile<string>
+  slackWorkspaceDir: Volatile<string>
+  slackModel: Volatile<string>
+  slackReasoningEffort: Volatile<string>
+  slackBotToken: Volatile<string>
+  slackAppToken: Volatile<string>
+  slackOwner: Volatile<string>
+  feishuWorkspaceDir: Volatile<string>
+  feishuModel: Volatile<string>
+  feishuReasoningEffort: Volatile<string>
+  feishuAppId: Volatile<string>
+  feishuAppSecret: Volatile<string>
+  feishuOwner: Volatile<string>
 }
 
 export const SETTINGS_NAMESPACE = 'dsh-messaging-gateway'

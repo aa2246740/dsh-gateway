@@ -6,6 +6,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import { SETTINGS_NAMESPACE, type Config } from '../config.ts'
 import { MessagingSection } from './MessagingSection.tsx'
 import { openListedSession, type SessionsFace } from './open-session.ts'
@@ -13,14 +14,14 @@ import { watchMessagingNavIcon } from './nav-icon.ts'
 import { MessagingSettings } from './SettingsPage.tsx'
 
 export const name = 'dsh-messaging-gateway-client'
-export const inject = ['slots', 'settingsScope', 'sessions', 'remote', 'remote.session']
+export const inject = ['slots', 'configForms', 'sessions', 'uiWorkspace', 'remote', 'remote.session']
 
 type ClientContext = Omit<Context, 'sessions'> & { readonly sessions: ISessions }
 type ModelCatalogRemote = { session: { modelCatalog: () => Promise<{ ok: true; value: ModelCatalog } | { ok: false; error: { code: string; message: string } }> } }
 
 function sessionsFace(ctx: ClientContext): SessionsFace {
   return {
-    open: id => { ctx.sessions.open(SessionId(id)) },
+    open: id => { ctx.uiWorkspace.openSession(SessionId(id)) },
     list: ctx.sessions.list,
     refresh: () => ctx.sessions.refresh(),
   }
@@ -38,7 +39,7 @@ function openSessionOf(ctx: ClientContext): (id: string) => void {
 }
 
 export function apply(ctx: ClientContext) {
-  const scope = ctx.settingsScope.bind<Config>({ namespace: SETTINGS_NAMESPACE })
+  const scope = ctx.configForms.get<Config>(SETTINGS_NAMESPACE)
   const openSession = openSessionOf(ctx)
   const loadModelCatalog = async (): Promise<ModelCatalog> => {
     const result = await (ctx.remote as unknown as ModelCatalogRemote).session.modelCatalog()
