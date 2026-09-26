@@ -13,7 +13,7 @@ Read [README.md](README.md) before installing or pairing. This file is the machi
 
 ## Install
 
-Default for stock DeepSeek Harness **0.1.7-rc.1** (`dsh-v0.1.7-rc.1`, npm `@deepseek-ai/dsh@0.1.7-rc.1`): official `dsh`. Those users have no Creator Mode and no DSHX. **pnpm** must be on PATH. Harness peers are `>=0.1.7-rc.1 <0.1.8`. Cordis is `^4.0.4`. Settings fields are volatile profile config; the 消息 page writes them through `configForms`.
+Default for stock DeepSeek Harness **0.1.7-rc.2** (`dsh-v0.1.7-rc.2`, npm `@deepseek-ai/dsh@0.1.7-rc.2`): official `dsh`. Those users have no Creator Mode and no DSHX. **pnpm** must be on PATH. Harness peers are `>=0.1.7-rc.1 <0.1.8`. Cordis is `^4.0.4`. Settings fields are volatile profile config; the 消息 page writes them through `configForms`.
 
 ```sh
 dsh plugin --profile web add github:aa2246740/dsh-gateway

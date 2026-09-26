@@ -1,20 +1,36 @@
 # dsh-gateway
 
-```sh
-dsh plugin --profile web add github:aa2246740/dsh-gateway
+## 安装
+
+### DSH Studio 桌面 App（推荐）
+
+打开 **设置 → 插件 → 添加插件**，在“包名或地址”中输入：
+
+```text
+github:aa2246740/dsh-gateway#v0.2.1
 ```
 
-需要官方 DeepSeek Harness **0.1.7-rc.1**（tag `dsh-v0.1.7-rc.1`，npm `@deepseek-ai/dsh@0.1.7-rc.1`；`dsh` 或 `npx @deepseek-ai/dsh@0.1.7-rc.1`），以及 PATH 上的 **pnpm**。这条命令在 `$DSH_HOME/profiles/web` 里跑 pnpm，把声明了 `dsh.bundle.patch` 的包装进 web profile。仓库已提交 `lib/`，git 安装不跑 `prepare`。然后**重启这个 Host，刷新页面**。`dsh plugin add` 只写 profile，不会热挂正在跑的进程。
+桌面端插件管理器负责 Desktop profile 和内置包管理器。本发布已包含 `lib/`；普通使用不需要 clone 或本地构建。若应用提示刷新或重新打开，请按提示完成。
+
+### Web CLI
+
+```sh
+dsh plugin --profile web add github:aa2246740/dsh-gateway#v0.2.1
+```
+
+这条官方 CLI 命令只写入 `web` profile，不能修改 Desktop App 的 profile。对于已经运行的 Web Host，请重新打开该 Host 一次，再刷新网页。
+
+需要官方 DeepSeek Harness **0.1.7-rc.2**（tag `dsh-v0.1.7-rc.2`，npm `@deepseek-ai/dsh@0.1.7-rc.2`）。Harness peers 是 `>=0.1.7-rc.1 <0.1.8`。
 
 `dsh` 不在 PATH 时：
 
 ```sh
-npx @deepseek-ai/dsh plugin --profile web add github:aa2246740/dsh-gateway
+npx @deepseek-ai/dsh plugin --profile web add github:aa2246740/dsh-gateway#v0.2.1
 ```
 
-DSH.app 的 Plugin Manager 只接受 npm 包名，吃不下 `github:`。用上面这条命令请走 `dsh web` 的 web profile。
+官方 CLI 只管理 `web` profile；Desktop App 请使用上面的应用内“添加插件”入口。
 
-本地 clone（可选）：
+本地 clone（开发/本地测试）：
 
 ```sh
 git clone https://github.com/aa2246740/dsh-gateway.git
