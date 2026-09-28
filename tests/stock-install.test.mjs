@@ -28,7 +28,7 @@ test('stock dsh plugin add can boot this package as a bundle', () => {
 test('README gives official Desktop and Web installation paths without DSHX', () => {
   const heading = readme.indexOf('# dsh-gateway')
   const desktop = readme.indexOf('设置 → 插件 → 添加插件')
-  const command = readme.indexOf('dsh plugin --profile web add github:aa2246740/dsh-gateway#v0.2.1')
+  const command = readme.indexOf(`dsh plugin --profile web add github:aa2246740/dsh-gateway#v${pkg.version}`)
   const pairing = readme.indexOf('## 中文：自己配对')
   assert.ok(heading >= 0)
   assert.ok(desktop > heading)

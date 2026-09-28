@@ -7,7 +7,7 @@
 打开 **设置 → 插件 → 添加插件**，在“包名或地址”中输入：
 
 ```text
-github:aa2246740/dsh-gateway#v0.2.1
+github:aa2246740/dsh-gateway#v0.2.2
 ```
 
 桌面端插件管理器负责 Desktop profile 和内置包管理器。本发布已包含 `lib/`；普通使用不需要 clone 或本地构建。若应用提示刷新或重新打开，请按提示完成。
@@ -15,7 +15,7 @@ github:aa2246740/dsh-gateway#v0.2.1
 ### Web CLI
 
 ```sh
-dsh plugin --profile web add github:aa2246740/dsh-gateway#v0.2.1
+dsh plugin --profile web add github:aa2246740/dsh-gateway#v0.2.2
 ```
 
 这条官方 CLI 命令只写入 `web` profile，不能修改 Desktop App 的 profile。对于已经运行的 Web Host，请重新打开该 Host 一次，再刷新网页。
@@ -25,7 +25,7 @@ dsh plugin --profile web add github:aa2246740/dsh-gateway#v0.2.1
 `dsh` 不在 PATH 时：
 
 ```sh
-npx @deepseek-ai/dsh plugin --profile web add github:aa2246740/dsh-gateway#v0.2.1
+npx @deepseek-ai/dsh plugin --profile web add github:aa2246740/dsh-gateway#v0.2.2
 ```
 
 官方 CLI 只管理 `web` profile；Desktop App 请使用上面的应用内“添加插件”入口。
@@ -50,6 +50,8 @@ dsh plugin --profile web remove dsh-messaging-gateway
 Loader id：`dsh-messaging-gateway`。装完并重启后打开 DSH **设置 → 消息**。
 
 Gateway 读状态或恢复聊天前，会原子租用 `$DSH_HOME/messaging-gateway/instance.lock`。同一 Home 上已有别的 Host 占着，这个 Gateway 就保持不活动。修好重复 Host，留下那个主人进程。
+
+磁盘满或文件系统暂时不可写时，Gateway 的锁心跳会保留原所有权，记录一次错误并继续重试；写入恢复后记录恢复消息。心跳异常不会再作为未捕获异常退出整个 Host。这项保护不代表磁盘已恢复可用，会话和消息仍需要足够空间才能保存。
 
 新会话默认工作目录：
 

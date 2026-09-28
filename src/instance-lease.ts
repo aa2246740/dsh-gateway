@@ -18,6 +18,7 @@ interface LeaseOwner {
   pid: number
   createdAt: string
   heartbeatAt: string
+  heartbeatPolicy?: 'retry-on-io-error'
 }
 
 export interface GatewayInstanceLease {
@@ -77,6 +78,11 @@ function writeOwner(lockPath: string, owner: LeaseOwner): void {
   } finally {
     rmSync(temporary, { force: true })
   }
+}
+
+function reportHeartbeat(message: string): void {
+  // Diagnostics must not turn a recoverable filesystem failure into a Host crash.
+  try { console.error(`[dsh-messaging-gateway] ${message}`) } catch { /* unavailable stderr */ }
 }
 
 function removeStaleLock(lockPath: string): boolean {
@@ -142,6 +148,7 @@ export function acquireGatewayInstanceLease(
       pid: process.pid,
       createdAt: started,
       heartbeatAt: started,
+      heartbeatPolicy: 'retry-on-io-error',
     }
     try {
       writeOwner(lockPath, owner)
@@ -149,11 +156,27 @@ export function acquireGatewayInstanceLease(
       rmSync(lockPath, { recursive: true, force: true })
       throw error
     }
+    let heartbeatFailure: string | undefined
     const timer = setInterval(() => {
-      const current = readOwner(lockPath)
-      if (current?.token !== token) return
-      owner = { ...owner, heartbeatAt: new Date(now()).toISOString() }
-      writeOwner(lockPath, owner)
+      try {
+        const current = readOwner(lockPath)
+        if (current?.token !== token) return
+        const next = { ...owner, heartbeatAt: new Date(now()).toISOString() }
+        writeOwner(lockPath, next)
+        owner = next
+        if (heartbeatFailure !== undefined) {
+          heartbeatFailure = undefined
+          reportHeartbeat('instance lease heartbeat recovered')
+        }
+      } catch (error) {
+        const code = errorCode(error) ?? 'UNKNOWN'
+        if (heartbeatFailure !== code) {
+          heartbeatFailure = code
+          reportHeartbeat(`instance lease heartbeat failed (${code}); keeping ownership and retrying. ${code === 'ENOSPC' ? 'Free disk space to restore writes.' : 'Check filesystem availability.'}`)
+        }
+        // The previous owner.json stays intact. Contenders check the owner's PID,
+        // not heartbeat age, so an I/O failure must never relinquish the live lock.
+      }
     }, heartbeatMs)
     timer.unref()
     let released = false

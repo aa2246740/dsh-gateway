@@ -1,6 +1,6 @@
 {
   "name": "dsh-messaging-gateway",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "dsh-gateway: one DSH Host, one messaging Gateway. BYO Slack and Feishu apps.",
   "type": "module",
   "main": "lib/dsh-messaging-gateway.js",
