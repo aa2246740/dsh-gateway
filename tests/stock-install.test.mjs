@@ -28,7 +28,7 @@ test('stock dsh plugin add can boot this package as a bundle', () => {
 test('README gives official Desktop and Web installation paths without DSHX', () => {
   const heading = readme.indexOf('# dsh-gateway')
   const desktop = readme.indexOf('设置 → 插件 → 添加插件')
-  const command = readme.indexOf('dsh plugin --profile web add github:aa2246740/dsh-gateway#v0.2.1')
+  const command = readme.indexOf('dsh plugin --profile web add github:aa2246740/dsh-gateway')
   const pairing = readme.indexOf('## 中文：自己配对')
   assert.ok(heading >= 0)
   assert.ok(desktop > heading)
@@ -46,7 +46,9 @@ test('AGENTS.md keeps official dsh as the stock install default', () => {
   assert.match(defaultBlock, /dsh plugin --profile web add github:aa2246740\/dsh-gateway/)
   assert.match(defaultBlock, /\bpnpm\b/)
   assert.match(defaultBlock, /Do not send stock users through DSHX/)
-  assert.match(defaultBlock, /0\.1\.7-rc\.2/)
+  assert.match(defaultBlock, /0\.2\.0-rc\.1/)
+  assert.match(defaultBlock, /4878cdabd87d4041bdaff61d04c966883b9fd07a/)
+  assert.doesNotMatch(defaultBlock, /0\.2\.0-alpha/)
   assert.doesNotMatch(defaultBlock, /0\.1\.7-alpha/)
 })
 
@@ -65,28 +67,34 @@ const HARNESS_PEERS = [
   '@deepseek-ai/dsh-settings',
 ]
 
-test('Harness peers accept 0.1.7-rc.2 and reject 0.1.7 alphas', () => {
+test('Harness peers accept 0.2.0-rc.1 and stable 0.2.0, and reject alphas and 0.1.7-rc.2', () => {
   const semver = require('semver')
   const adapter = readFileSync(join(root, 'tools/client-build.js'), 'utf8')
   for (const name of HARNESS_PEERS) {
     const range = pkg.peerDependencies[name]
-    assert.equal(range, '>=0.1.7-rc.1 <0.1.8', name)
+    assert.equal(range, '>=0.2.0-rc.1 <0.2.1', name)
     assert.equal(pkg.devDependencies[name], range, name)
-    assert.equal(semver.satisfies('0.1.7-rc.2', range), true, name)
-    assert.equal(semver.satisfies('0.1.7-rc.1', range), true, name)
-    assert.equal(semver.satisfies('0.1.5-rc.3', range), false, name)
-    assert.equal(semver.satisfies('0.1.5-rc.2', range), false, name)
-    assert.equal(semver.satisfies('0.1.7-alpha.1', range), false, name)
-    assert.equal(semver.satisfies('0.1.7-alpha.2', range), false, name)
-    assert.equal(semver.satisfies('0.1.7-rc.2', '^0.1.5-rc.3'), false)
+    assert.equal(semver.satisfies('0.2.0-rc.1', range), true, name)
+    assert.equal(semver.satisfies('0.2.0', range), true, name)
+    assert.equal(semver.satisfies('0.2.0-rc.2', range), true, name)
+    assert.equal(semver.satisfies('0.2.0-alpha.1', range), false, name)
+    assert.equal(semver.satisfies('0.2.0-alpha.2', range), false, name)
+    assert.equal(semver.satisfies('0.1.7-rc.2', range), false, name)
+    assert.equal(semver.satisfies('0.1.7-rc.1', range), false, name)
+    assert.equal(semver.satisfies('0.2.1', range), false, name)
   }
+  assert.equal(pkg.version, '0.2.2')
+  assert.equal(pkg.name, 'dsh-messaging-gateway')
   assert.equal(semver.satisfies('4.0.4', pkg.peerDependencies['@deepseek-ai/cordis']), true)
   assert.equal(semver.satisfies('4.0.2', pkg.peerDependencies['@deepseek-ai/cordis']), false)
   assert.equal(semver.satisfies('3.18.4', pkg.peerDependencies['@deepseek-ai/schemastery']), true)
+  assert.match(readme, /0\.2\.0-rc\.1/)
+  assert.match(readme, /@deepseek-ai\/dsh@0\.2\.0-rc\.1/)
+  assert.match(readme, /4878cdabd87d4041bdaff61d04c966883b9fd07a/)
+  assert.match(readme, /稳定版 `0\.2\.0`/)
   assert.match(readme, /0\.1\.7-rc\.2/)
-  assert.match(readme, /@deepseek-ai\/dsh@0\.1\.7-rc\.2/)
-  assert.doesNotMatch(readme, /0\.1\.7-alpha/)
-  assert.match(adapter, /dsh-v0\.1\.7-rc\.2/)
+  assert.doesNotMatch(readme, /0\.2\.0-alpha/)
+  assert.match(adapter, /dsh-v0\.2\.0-rc\.1/)
   assert.equal(adapter.includes('dsh-api-workspace-controller\\/default-workspace'), true)
 })
 
