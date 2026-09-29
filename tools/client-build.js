@@ -3,7 +3,7 @@
 // the emitted bundle recipe so plugins can run `npm run build` against a public clone.
 import { readFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 
@@ -14,7 +14,8 @@ const PLATFORM_MODULES = [
 ]
 
 const CSS_VIRTUAL_PREFIX = '\0dshx-css-module:'
-// Official packages/client/tsdown.client.ts INLINE_SAFE at dsh-v0.1.7-rc.2.
+// Official packages/client/tsdown.client.ts INLINE_SAFE at dsh-v0.2.0-rc.2.
+// Unchanged from dsh-v0.1.7-rc.2, including dsh-api-workspace-controller/default-workspace.
 const INLINE_SAFE = /^(?:@deepseek-ai\/dsh-(?:file-reference|session|llm|tools|brand|deque|output-retention|typert-protocol|util-crypto|util-values|util-workspace-path)(?:\/|$)|@deepseek-ai\/dsh-token-meter\/client$|@deepseek-ai\/dsh-native-command\/types$|@deepseek-ai\/dsh-host-open-in-app\/shared$|@deepseek-ai\/dsh-plugin-manager\/registry$|@deepseek-ai\/dsh-agent-preset-registry\/display$|@deepseek-ai\/dsh-api-workspace-controller\/default-workspace$|@deepseek-ai\/dsh-spill-policy\/notice$)/
 const VENDORED_LIBRARY = /^@deepseek-ai\/(cosmokit|schemastery)(\/|$)/
 const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/
@@ -42,6 +43,12 @@ function styleInjectionModule(id, fileId, css, classMap) {
   ]
   source.push(classMap === undefined ? 'export {};' : `export default ${JSON.stringify(classMap)};`)
   return source.join('\n')
+}
+
+function cssModuleVirtualId(fileId) {
+  const rel = relative(process.cwd(), fileId)
+  const portable = (rel.startsWith('..') ? fileId : rel).split('\\').join('/')
+  return CSS_VIRTUAL_PREFIX + portable + '.mjs'
 }
 
 function pluginExternals() {
@@ -97,11 +104,12 @@ function clientConfig(id, entry) {
       resolveId(source, importer) {
         if (!source.endsWith('.module.css')) return null
         const abs = importer !== undefined && !isAbsolute(source) ? join(dirname(importer), source) : source
-        return CSS_VIRTUAL_PREFIX + abs + '.mjs'
+        return cssModuleVirtualId(abs)
       },
       async load(virtualId) {
         if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
-        const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -'.mjs'.length)
+        const named = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -'.mjs'.length)
+        const fileId = isAbsolute(named) ? named : join(process.cwd(), named)
         this.addWatchFile?.(fileId)
         const source = await readFile(fileId)
         const { transform } = await lightning()
