@@ -20,7 +20,7 @@ dsh plugin --profile web add github:aa2246740/dsh-gateway
 
 这条官方 CLI 命令只写入 `web` profile，不能修改 Desktop App 的 profile。对于已经运行的 Web Host，请重新打开该 Host 一次，再刷新网页。
 
-需要官方 DeepSeek Harness **0.2.0-rc.1**（tag `dsh-v0.2.0-rc.1`，SHA `4878cdabd87d4041bdaff61d04c966883b9fd07a`，npm `@deepseek-ai/dsh@0.2.0-rc.1`）。本包版本是 `0.2.2`。Harness peers 是 `>=0.2.0-rc.1 <0.2.1`：接受 `0.2.0-rc.1` 与稳定版 `0.2.0`，拒绝 `0.2.0` alpha，也拒绝 `0.1.7-rc.2`。
+需要官方 DeepSeek Harness **0.2.0-rc.2**（tag `dsh-v0.2.0-rc.2`，SHA `639ed015397290b3745d163aafe02ffee4aa3f84`，npm `@deepseek-ai/dsh@0.2.0-rc.2`）。本包版本是 `0.2.2`。Harness peers 是 `>=0.2.0-rc.1 <0.2.1`：接受 `0.2.0-rc.2` 与稳定版 `0.2.0`，拒绝 `0.2.0` alpha，也拒绝 `0.1.7-rc.2`。
 
 `dsh` 不在 PATH 时：
 
