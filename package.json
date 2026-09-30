@@ -1,6 +1,10 @@
 {
   "name": "dsh-messaging-gateway",
-  "version": "0.2.2",
+  "version": "0.2.3",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "description": "dsh-gateway: one DSH Host, one messaging Gateway. BYO Slack and Feishu apps.",
   "type": "module",
   "main": "lib/dsh-messaging-gateway.js",
@@ -56,6 +60,7 @@
   "files": [
     "lib/*.js",
     "lib/*.js.map",
+    "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "README.md",
     "AGENTS.md",
