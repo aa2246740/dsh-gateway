@@ -28,7 +28,7 @@ test('stock dsh plugin add can boot this package as a bundle', () => {
 test('README gives official Desktop and Web installation paths without DSHX', () => {
   const heading = readme.indexOf('# dsh-gateway')
   const desktop = readme.indexOf('设置 → 插件 → 添加插件')
-  const command = readme.indexOf('dsh plugin --profile web add github:aa2246740/dsh-gateway')
+  const command = readme.indexOf(`dsh plugin --profile web add ${pkg.name}@${pkg.version}`)
   const pairing = readme.indexOf('## 中文：自己配对')
   assert.ok(heading >= 0)
   assert.ok(desktop > heading)
@@ -83,7 +83,7 @@ test('Harness peers accept 0.2.0-rc.2 and stable 0.2.0, and reject alphas and 0.
     assert.equal(semver.satisfies('0.1.7-rc.1', range), false, name)
     assert.equal(semver.satisfies('0.2.1', range), false, name)
   }
-  assert.equal(pkg.version, '0.2.2')
+  assert.equal(pkg.version, '0.2.3')
   assert.equal(pkg.name, 'dsh-messaging-gateway')
   assert.equal(semver.satisfies('4.0.4', pkg.peerDependencies['@deepseek-ai/cordis']), true)
   assert.equal(semver.satisfies('4.0.2', pkg.peerDependencies['@deepseek-ai/cordis']), false)
