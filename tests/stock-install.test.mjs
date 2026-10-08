@@ -83,7 +83,7 @@ test('Harness peers accept 0.2.0-rc.2 and stable 0.2.0, and reject alphas and 0.
     assert.equal(semver.satisfies('0.1.7-rc.1', range), false, name)
     assert.equal(semver.satisfies('0.2.1', range), false, name)
   }
-  assert.equal(pkg.version, '0.2.3')
+  assert.equal(pkg.version, '0.2.4')
   assert.equal(pkg.name, 'dsh-messaging-gateway')
   assert.equal(semver.satisfies('4.0.4', pkg.peerDependencies['@deepseek-ai/cordis']), true)
   assert.equal(semver.satisfies('4.0.2', pkg.peerDependencies['@deepseek-ai/cordis']), false)
