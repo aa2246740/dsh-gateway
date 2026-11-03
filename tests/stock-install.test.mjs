@@ -67,34 +67,36 @@ const HARNESS_PEERS = [
   '@deepseek-ai/dsh-settings',
 ]
 
-test('Harness peers accept 0.2.0-rc.2 and stable 0.2.0, and reject alphas and 0.1.7-rc.2', () => {
+test('Harness peers accept 0.2.1-rc.5 and reject alphas, 0.2.0, and 0.1.7-rc.2', () => {
   const semver = require('semver')
   const adapter = readFileSync(join(root, 'tools/client-build.js'), 'utf8')
   for (const name of HARNESS_PEERS) {
     const range = pkg.peerDependencies[name]
-    assert.equal(range, '>=0.2.0-rc.1 <0.2.1', name)
+    assert.equal(range, '>=0.2.1-rc.1 <0.2.2', name)
     assert.equal(pkg.devDependencies[name], range, name)
-    assert.equal(semver.satisfies('0.2.0-rc.2', range), true, name)
-    assert.equal(semver.satisfies('0.2.0', range), true, name)
-    assert.equal(semver.satisfies('0.2.0-rc.2', range), true, name)
+    assert.equal(semver.satisfies('0.2.1-rc.5', range), true, name)
+    assert.equal(semver.satisfies('0.2.1', range), true, name)
+    assert.equal(semver.satisfies('0.2.0-rc.2', range), false, name)
+    assert.equal(semver.satisfies('0.2.0', range), false, name)
     assert.equal(semver.satisfies('0.2.0-alpha.1', range), false, name)
-    assert.equal(semver.satisfies('0.2.0-alpha.2', range), false, name)
+    assert.equal(semver.satisfies('0.2.1-alpha.1', range), false, name)
     assert.equal(semver.satisfies('0.1.7-rc.2', range), false, name)
     assert.equal(semver.satisfies('0.1.7-rc.1', range), false, name)
-    assert.equal(semver.satisfies('0.2.1', range), false, name)
+    assert.equal(semver.satisfies('0.2.2', range), false, name)
   }
-  assert.equal(pkg.version, '0.2.4')
+  assert.equal(pkg.version, '0.2.5')
   assert.equal(pkg.name, 'dsh-messaging-gateway')
   assert.equal(semver.satisfies('4.0.4', pkg.peerDependencies['@deepseek-ai/cordis']), true)
   assert.equal(semver.satisfies('4.0.2', pkg.peerDependencies['@deepseek-ai/cordis']), false)
   assert.equal(semver.satisfies('3.18.4', pkg.peerDependencies['@deepseek-ai/schemastery']), true)
-  assert.match(readme, /0\.2\.0-rc\.2/)
-  assert.match(readme, /@deepseek-ai\/dsh@0\.2\.0-rc\.2/)
-  assert.match(readme, /639ed015397290b3745d163aafe02ffee4aa3f84/)
-  assert.match(readme, /稳定版 `0\.2\.0`/)
+  assert.match(readme, /0\.2\.1-rc\.5/)
+  assert.match(readme, /@deepseek-ai\/dsh@0\.2\.1-rc\.5/)
+  assert.match(readme, /b830ec950faba0a46dda564be3e2d854afed94f1/)
+  assert.match(readme, /`>=0\.2\.1-rc\.1 <0\.2\.2`/)
   assert.match(readme, /0\.1\.7-rc\.2/)
   assert.doesNotMatch(readme, /0\.2\.0-alpha/)
-  assert.match(adapter, /dsh-v0\.2\.0-rc\.2/)
+  assert.doesNotMatch(readme, /0\.2\.1-alpha/)
+  assert.match(adapter, /dsh-v0\.2\.1-rc\.5/)
   assert.equal(adapter.includes('dsh-api-workspace-controller\\/default-workspace'), true)
 })
 

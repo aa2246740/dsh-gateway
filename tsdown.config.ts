@@ -13,10 +13,13 @@ function resolveHarnessAdapter(): string {
   if (!recorded) {
     throw new Error('dshx client build requires a Harness root from DSHX_HARNESS or ~/.config/dshx/harness')
   }
-  return join(resolve(recorded), 'tools/dshx/src/client-build.js')
+  process.env.DSHX_HARNESS = resolve(recorded)
+  return join(process.env.DSHX_HARNESS, 'tools/dshx/src/client-build.js')
 }
 
-const adapter = existsSync(vendored) ? vendored : resolveHarnessAdapter()
+// Vendored tools/client-build.js reads the target platform table at import time.
+const harnessAdapter = resolveHarnessAdapter()
+const adapter = existsSync(vendored) ? vendored : harnessAdapter
 if (!existsSync(adapter)) throw new Error(`dshx client build adapter not found: ${adapter}`)
 const { externalClientBundle } = await import(pathToFileURL(adapter).href)
 
